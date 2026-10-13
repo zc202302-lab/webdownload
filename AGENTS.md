@@ -19,3 +19,5 @@
 
 爆款菜谱模式：Windows 双击 ebook_collector/start_recipes.bat；共用原设置和登录浏览器，输出到 output_dir/爆款菜谱。每道菜生成独立PDF和JSON，菜谱目录.html提供搜索。仅采集网页版文字及图片，不含APP视频。检测到.locked-content即停止，不将付费预览标记为完整。重启从列表第一页扫描，按菜谱ID和成品校验值跳过已完成项，避免新增内容移动页码导致漏项。原图进度位于爆款菜谱/_work，失败时保留。目录和正文选择器依据公开HTML核实；登录后的完整正文与浏览器PDF打印仍需要实测。
 
+Windows便携EXE：desktop_app.py提供杂志/菜谱启动入口和检查更新按钮。app_runtime.app_root在冻结后必须指向EXE所在文件夹，不能写入PyInstaller解压临时目录。更新检查只读本仓库GitHub正式Release；发现新版打开下载页，由用户关闭程序并替换EXE，不覆盖设置、浏览器资料、PDF或进度。VERSION每次正式发布递增。Windows运行build_windows.py打包；GitHub Actions在Windows上运行全部离线测试、构建、执行EXE --self-test后上传构建产物并发布未存在的版本号。不包含浏览器，使用本机Edge/Chrome。不要将用户数据放入发行包。
+

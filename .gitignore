@@ -20,4 +20,7 @@ settings.json
 *.png
 *.part
 *.tmp
+build/
+dist/
+*.spec
 

@@ -12,7 +12,8 @@ from playwright.sync_api import Error as PlaywrightError
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
-ROOT = Path(__file__).resolve().parent
+from app_runtime import app_root
+ROOT = app_root()
 from library_manager import Library, StorageFull, book_id, file_hash, read_settings, validate_pdf
 from chapter_reader import collect_chapters, request_image
 
