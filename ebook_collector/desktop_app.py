@@ -35,6 +35,22 @@ def self_test():
         assert playwright.chromium.name == 'chromium'
     assert collector.ROOT == app_root()
     assert recipe_collector.ROOT == app_root()
+    import tempfile
+    from pathlib import Path
+    from PIL import Image
+    from library_manager import validate_pdf
+    with tempfile.TemporaryDirectory() as folder:
+        image = Path(folder) / 'test.jpg'
+        pdf = Path(folder) / 'test.pdf'
+        Image.new('RGB', (100, 150), 'white').save(image)
+        collector.build_pdf([image], pdf)
+        assert validate_pdf(pdf, 1) == 1
+    root = tk.Tk()
+    root.withdraw()
+    app = App(root)
+    root.update_idletasks()
+    assert len(app.start_buttons) == 2
+    root.destroy()
     print('EXE self-test passed:', VERSION)
 
 
