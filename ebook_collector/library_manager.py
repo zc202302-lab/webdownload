@@ -139,6 +139,9 @@ class Library:
                 key, old = matches[0]
                 item.update({k: old[k] for k in ('pdf', 'pages', 'bytes', 'sha256', 'status')})
                 del self.db['books'][key]
+        if item.get('status')=='已完成' and item.get('empty_record') and not item.get('pdf'):
+            record=self.root / item['empty_record']
+            return record.is_file() and file_hash(record)==item.get('empty_record_sha256')
         if item.get('status') != '已完成' or not item.get('pdf'):
             return False
         path = self.root / item['pdf']

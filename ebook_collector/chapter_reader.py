@@ -44,7 +44,7 @@ def visible_next(page):
 
 
 def modal_body(next_button):
-    modal = next_button.locator('xpath=ancestor::*[.//*[self::img or self::p or self::table]][1]')
+    modal = next_button.locator('xpath=ancestor::*[@role="dialog" or contains(concat(" ",normalize-space(@class)," ")," modal-content ") or .//*[self::img or self::p or self::table]][1]')
     tag = modal.evaluate('(e)=>e.tagName')
     if tag in ('BODY', 'HTML'):
         raise RuntimeError('未能识别正文弹窗，已停止以避免保存广告或导航。')
@@ -53,7 +53,13 @@ def modal_body(next_button):
 
 def body_snapshot(modal, title):
     return modal.evaluate(r'''(e,title) => {
-        const body=e.querySelector('.modal-body,.chapter-content,.article-content,#chapterContent,#articleContent') || e;
+        const selector='.modal-body,.chapter-content,.article-content,#chapterContent,#articleContent';
+        const found=e.matches(selector) ? e : e.querySelector(selector);
+        const body=found || e;
+        const visible=x=>!!(x.getBoundingClientRect().width && x.getBoundingClientRect().height);
+        const restricted=[...e.querySelectorAll('.locked-content,.paywall')].some(visible);
+        let pending=e.getAttribute('aria-busy')==='true' || [...e.querySelectorAll('[aria-busy="true"],.loading,.spinner,.load-error,.error-message,[role="alert"]')].some(visible);
+        const unsupported=!!body.querySelector('iframe,canvas,video,object,embed,svg');
         const clone=body.cloneNode(true);
         clone.querySelectorAll('script,style,iframe,source,button,nav,.modal-header,.modal-footer,.chapter-nav,.chapter-navigation,.close').forEach(x=>x.remove());
         clone.querySelectorAll('a,[role=button]').forEach(x=>{
@@ -63,6 +69,7 @@ def body_snapshot(modal, title):
         clone.querySelectorAll('h1,h2,h3,h4,.modal-title').forEach(x=>{
             if(norm(x.textContent)===norm(title)) x.remove();
         });
+        if(/^(加载中|正在加载|加载失败|网络错误|请稍候|loading|failed to load)[.。…!！\s]*$/i.test(clone.textContent.trim())) pending=true;
         clone.querySelectorAll('*').forEach(x=>{
             x.removeAttribute('onclick');
             x.removeAttribute('id');
@@ -73,7 +80,7 @@ def body_snapshot(modal, title):
             x.setAttribute('src',new URL(x.getAttribute('src') || x.getAttribute('data-src') || '',e.ownerDocument.baseURI).href);
             x.removeAttribute('srcset'); x.removeAttribute('loading');
         });
-        return {html:clone.innerHTML,text_length:clone.textContent.trim().length,image_urls:[...clone.querySelectorAll('img')].map(im=>im.getAttribute('src'))};
+        return {html:clone.innerHTML,text_length:clone.textContent.trim().length,image_urls:[...clone.querySelectorAll('img')].map(im=>im.getAttribute('src')),body_identified:!!found,restricted,pending,unsupported};
     }''', title)
 
 
@@ -107,10 +114,19 @@ def image_sources(modal):
     }''')
 
 
+def empty_body(snapshot, sources):
+    return (snapshot.get('body_identified', False) and snapshot['text_length']==0
+            and not sources and not snapshot.get('image_urls')
+            and not any(snapshot.get(key) for key in ('restricted','pending','unsupported')))
+
+
 def wait_chapter(page, expected, previous, settings):
     deadline=time.monotonic()+max(300.0,float(settings.get('chapter_wait_seconds',300)))
     stable_since=None
     last_signature=None
+    empty_since=None
+    empty_signature=None
+    empty_result=None
     title=re.sub(r'^\s*\d+\s+', '',expected)
     while time.monotonic()<deadline:
         try:
@@ -121,7 +137,7 @@ def wait_chapter(page, expected, previous, settings):
             for index in range(headings.count()-1,-1,-1):
                 heading=headings.nth(index)
                 if heading.is_visible():
-                    candidate=heading.locator('xpath=ancestor::*[.//img or .//p or .//table][1]')
+                    candidate=heading.locator('xpath=ancestor::*[@role="dialog" or contains(concat(" ",normalize-space(@class)," ")," modal-content ") or .//img or .//p or .//table][1]')
                     if candidate.evaluate('(e)=>e.tagName') not in ('BODY','HTML'):
                         modal=candidate
                         break
@@ -131,12 +147,25 @@ def wait_chapter(page, expected, previous, settings):
             scroll=advance_scroll(modal)
             snapshot=body_snapshot(modal,title)
             sources=image_sources(modal)
+            if snapshot.get('restricted'):
+                raise PermissionError(f'正文存在权限锁定提示，未保存本章：{expected}')
             signature=json.dumps([[(im['src'],im['width'],im['height']) for im in sources],snapshot['html'],scroll['height']])
             captured={url for im in sources for url in (im['src'],im.get('dom_src',im['src']))}
             all_body_images=all(url in captured for url in snapshot.get('image_urls',[]))
-            ready=(bool(sources) or snapshot['text_length']>40) and all_body_images and all(im['ready'] for im in sources) and title in text and signature != previous and scroll['bottom']
+            ready=(bool(sources) or snapshot['text_length']>0) and all_body_images and all(im['ready'] for im in sources) and title in text and signature != previous and scroll['bottom'] and not snapshot.get('pending') and not snapshot.get('unsupported')
+            is_empty=empty_body(snapshot,sources) and title in text and scroll['bottom']
         except (RuntimeError,PlaywrightError):
             ready=False
+            is_empty=False
+        if is_empty:
+            if signature!=empty_signature:
+                empty_since=time.monotonic()
+                empty_signature=signature
+            empty_result=(sources,signature,modal)
+        else:
+            empty_since=None
+            empty_signature=None
+            empty_result=None
         if ready:
             if signature != last_signature:
                 last_signature=signature
@@ -147,6 +176,10 @@ def wait_chapter(page, expected, previous, settings):
             stable_since=None
             last_signature=None
         page.wait_for_timeout(250)
+    # Empty content waits the full configured interval (at least 300 seconds).
+    # A last-moment DOM change, missing image or unresolved loader cannot pass.
+    if empty_result and empty_since is not None and time.monotonic()-empty_since>=30:
+        return empty_result
     raise RuntimeError(f'正文图片在等待时间内未全部加载完成，未保存本章：{expected}')
 
 
@@ -270,15 +303,22 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         raise RuntimeError('目录发生变化，暂停以便核查原进度。')
     all_paths = []
     chapter_pdfs=[]
+    rendered_entries=[]
+    blank_entries=[]
     for index, expected in enumerate(entries):
         library.check_space()
         chapter_pdf=work/f'chapter_{index+1:04d}.pdf'
         complete=progress.get('completed_entries',{}).get(str(index))
+        if complete and complete.get('empty') and complete.get('title')==expected:
+            blank_entries.append(expected)
+            print(f'目录 {index+1}/{len(entries)} 已记录为空白，跳过：{expected}')
+            continue
         if complete and chapter_pdf.exists() and file_hash(chapter_pdf)==complete['sha256']:
             valid=all((work / name).exists() and file_hash(work / name)==digest for name,digest in complete['images'].items())
             if valid:
                 validate_pdf(chapter_pdf,complete['pages'])
                 chapter_pdfs.append(chapter_pdf)
+                rendered_entries.append(expected)
                 print(f'目录 {index+1}/{len(entries)} 已完整保存，跳过：{expected}')
                 continue
         print(f'打开杂志目录 {index+1}/{len(entries)}：{expected}')
@@ -286,7 +326,21 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         print(f'等待正文目录 {index+1}/{len(entries)} 完整加载……')
         sources,signature,modal=wait_chapter(page,expected,None,settings)
         snapshot=body_snapshot(modal,re.sub(r'^\s*\d+\s+','',expected))
-        mixed=snapshot['text_length']>40
+        if snapshot.get('restricted'):
+            raise PermissionError(f'保存前发现正文权限锁定：{expected}')
+        if snapshot.get('pending') or snapshot.get('unsupported'):
+            raise RuntimeError(f'保存前正文仍有加载提示或未支持的媒体：{expected}')
+        if empty_body(snapshot,sources):
+            close_chapter(modal)
+            progress.setdefault('completed_entries',{})[str(index)]={'empty':True,'title':expected}
+            save_json(progress_path,progress)
+            blank_entries.append(expected)
+            library.update(task,'处理中',blank_entries=blank_entries)
+            print(f'目录 {index+1}/{len(entries)} 无文字和图片，记录为空白并跳过：{expected}')
+            continue
+        if not sources and not snapshot['text_length']:
+            raise RuntimeError(f'正文在保存前发生变化，未能确认是否空白：{expected}')
+        mixed=snapshot['text_length']>0
         chapter_images=[]
         mapping={}
         for image_index, item in enumerate(sources):
@@ -319,11 +373,20 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         progress.setdefault('completed_entries',{})[str(index)]={'sha256':file_hash(chapter_pdf),'pages':pages,'images':{p.name:file_hash(p) for p in chapter_images}}
         save_json(progress_path,progress)
         chapter_pdfs.append(chapter_pdf)
+        rendered_entries.append(expected)
         close_chapter(modal)
+    if not chapter_pdfs:
+        library.update(task,'已完成',pdf='',pages=0,bytes=0,mode='目录正文',
+                       blank_entries=blank_entries,chapter_count=len(entries),
+                       empty_record=progress_path.relative_to(library.root).as_posix(),
+                       empty_record_sha256=file_hash(progress_path),reason='全部目录均为空白，已跳过；未生成PDF')
+        return
     library.check_space(sum(p.stat().st_size for p in chapter_pdfs)*2+64*1024*1024)
-    page_count=merge_chapters(chapter_pdfs,output,entries)
+    page_count=merge_chapters(chapter_pdfs,output,rendered_entries)
     library.complete(task,output,page_count)
-    library.update(task,'已完成',mode='目录正文',chapter_count=len(entries),body_image_sizes=[x['size'] for x in progress['chapters'].values()])
+    library.update(task,'已完成',mode='目录正文',chapter_count=len(entries),blank_entries=blank_entries,
+                   reason=f'已跳过{len(blank_entries)}个空白条目：'+ '；'.join(blank_entries) if blank_entries else '',
+                   body_image_sizes=[x['size'] for x in progress['chapters'].values()])
     if not settings['keep_page_images']:
         import shutil
         shutil.rmtree(work)
