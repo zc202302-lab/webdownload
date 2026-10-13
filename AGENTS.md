@@ -1,5 +1,7 @@
 # 接续开发
 
+v1.0.4关闭备用方式：杂志目录正文和独立电子书阅读器未找到可见叉号时，modal_close.close_by_backdrop在实际弹窗祖先中寻找左右可见遮罩；elementFromPoint须命中遮罩自身且不在正文/阅读器容器内，点击后必须等原弹窗隐藏才能继续。两侧均失败或无可用遮罩仍停止整批并保留进度。tests/test_modal_close.py覆盖命中检查、正文排除、左右回退、失败终止及叉号优先；登录后的真实异常弹窗仍需用户电脑验证。
+
 独立电子书板块（v1.0.3）：book_collector.py，EXE“下载电子书”或start_books.bat。
 入口category=books；公开DOM已核查#magazineList .magazine-item a.detail-btn、#loadMore、#loading、.reader-btn[data-url]、#readerModal、#closeReader。
 列表向下滚动自动加载，以加载更多隐藏且无加载提示、到底连续30秒稳定确认结束；错误或至少300秒无进展立即停止，扫描记录保留。

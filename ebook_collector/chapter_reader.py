@@ -272,6 +272,7 @@ def merge_chapters(pdfs, output, entries):
 
 
 def close_chapter(modal):
+    from modal_close import close_by_backdrop
     scope=modal
     for _ in range(6):
         controls=scope.locator('[aria-label="Close"],[aria-label="关闭"],.close,.modal-close,.btn-close,[data-dismiss="modal"],[data-bs-dismiss="modal"]')
@@ -287,7 +288,10 @@ def close_chapter(modal):
         if parent.evaluate('(e)=>e.tagName') in ('BODY','HTML'):
             break
         scope=parent
-    raise RuntimeError('没有找到正文弹窗右上角叉号，当前条目未关闭，整批暂停。')
+    print('未找到正文弹窗右上角叉号，尝试点击左右遮罩区域关闭……')
+    if close_by_backdrop(modal):
+        return
+    raise RuntimeError('没有找到正文弹窗右上角叉号，点击左右遮罩后仍未确认关闭，整批暂停。')
 
 
 def collect_chapters(context, page, task, library, settings, build_pdf):
@@ -390,3 +394,4 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
     if not settings['keep_page_images']:
         import shutil
         shutil.rmtree(work)
+

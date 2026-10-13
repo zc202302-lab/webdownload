@@ -240,8 +240,16 @@ def collect_book(context, frame, total, item, store, settings):
 
 
 def close_book_reader(page):
-    page.locator('#closeReader').click(timeout=10000)
-    page.locator('#readerModal').wait_for(state='hidden', timeout=10000)
+    from modal_close import close_by_backdrop
+    modal = page.locator('#readerModal')
+    button = page.locator('#closeReader')
+    if button.count() and button.is_visible():
+        button.click(timeout=10000)
+        modal.wait_for(state='hidden', timeout=10000)
+        return
+    print('未找到阅读器右上角叉号，尝试点击左右遮罩区域关闭……')
+    if not close_by_backdrop(modal):
+        raise RuntimeError('阅读器没有可用关闭按钮，点击左右遮罩后仍未确认关闭，整批暂停。')
 
 
 def batch_books(context, page, items, store, settings):
