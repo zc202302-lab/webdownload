@@ -2,8 +2,9 @@
 import sys
 from pathlib import Path
 
-VERSION = '1.0.2'
+VERSION = '1.0.3'
 
 
 def app_root():
     return Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+

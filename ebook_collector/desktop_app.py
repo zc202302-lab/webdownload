@@ -26,11 +26,13 @@ def self_test():
     # Frozen smoke test: imports and browser driver must survive packaging.
     import collector
     import recipe_collector
+    import book_collector
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         assert playwright.chromium.name == 'chromium'
     assert collector.ROOT == app_root()
     assert recipe_collector.ROOT == app_root()
+    assert book_collector.ROOT == app_root()
     import tempfile
     from pathlib import Path
     from PIL import Image
@@ -45,7 +47,7 @@ def self_test():
     root.withdraw()
     app = App(root)
     root.update_idletasks()
-    assert len(app.start_buttons) == 2
+    assert len(app.start_buttons) == 3
     root.destroy()
     # Verify GUI prompts, log routing and completion without console stdin.
     result = []
@@ -123,8 +125,8 @@ class App:
         self.events = queue.Queue()
         self.updating = False
         root.title('东方美食资料下载工具')
-        root.geometry('560x420')
-        root.minsize(520, 400)
+        root.geometry('560x480')
+        root.minsize(520, 460)
         style = ttk.Style(root)
         if 'vista' in style.theme_names():
             style.theme_use('vista')
@@ -134,7 +136,7 @@ class App:
         ttk.Label(frame, text=f'版本 {VERSION} · Windows 便携版', padding=(0, 8)).pack(anchor='w')
         ttk.Label(frame, text='选择任务后，会打开浏览器和下载窗口。\n请自行登录网站，再按下载窗口提示开始。', padding=(0, 10)).pack(anchor='w')
         self.start_buttons = []
-        for text, mode in [('下载电子杂志', 'magazines'), ('下载爆款菜谱', 'recipes')]:
+        for text, mode in [('下载电子杂志', 'magazines'), ('下载电子书', 'books'), ('下载爆款菜谱', 'recipes')]:
             button = ttk.Button(frame, text=text, command=lambda m=mode: self.start(m))
             button.pack(fill='x', pady=6)
             self.start_buttons.append(button)
@@ -276,9 +278,10 @@ if __name__ == '__main__':
             else:
                 messagebox.showerror('自动更新失败', f'{exc}\n原程序或备份已保留，请重新打开原程序。')
             raise SystemExit(1)
-    elif len(sys.argv) == 3 and sys.argv[1] == '--collect' and sys.argv[2] in ('magazines', 'recipes'):
+    elif len(sys.argv) == 3 and sys.argv[1] == '--collect' and sys.argv[2] in ('magazines', 'recipes', 'books'):
         run_collection(sys.argv[2])
     else:
         root = tk.Tk()
         App(root)
         root.mainloop()
+

@@ -32,7 +32,7 @@ class TaskWindow:
         self.pending = None
         self.finished = False
         self.closing = False
-        root.title('爆款菜谱下载' if mode == 'recipes' else '电子杂志下载')
+        root.title({'recipes': '爆款菜谱下载', 'books': '电子书下载', 'magazines': '电子杂志下载'}[mode])
         root.geometry('800x600')
         root.minsize(650, 480)
         frame = ttk.Frame(root, padding=20)
@@ -84,6 +84,9 @@ class TaskWindow:
                 runner()
             elif self.mode == 'recipes':
                 from recipe_collector import main
+                main()
+            elif self.mode == 'books':
+                from book_collector import main
                 main()
             else:
                 from collector import main
@@ -157,3 +160,4 @@ class TaskWindow:
             self.root.destroy()
             return
         self.root.after(100, self.poll)
+

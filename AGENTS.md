@@ -1,5 +1,13 @@
 # 接续开发
 
+独立电子书板块（v1.0.3）：book_collector.py，EXE“下载电子书”或start_books.bat。
+入口category=books；公开DOM已核查#magazineList .magazine-item a.detail-btn、#loadMore、#loading、.reader-btn[data-url]、#readerModal、#closeReader。
+列表向下滚动自动加载，以加载更多隐藏且无加载提示、到底连续30秒稳定确认结束；错误或至少300秒无进展立即停止，扫描记录保留。
+按详情链接进入，点击立即阅读；翻页使用下一页箭头，阅读器页码与实际数值图片文件名双重校验，不推测图片URL。
+全部页保存与PDF校验后点击右上角关闭，确认#readerModal隐藏才提交完成记录并处理下一本。
+output_dir/电子书内独立PDF、电子书目录.html、电子书记录.json、_work；共用登录资料和设置，整本空白页保留。
+tests/test_books.py测试扫描慢加载/失败/去重、页码/双页/缺图/箭头/续传/关闭失败终止。登录后阅读器DOM和完整下载仍需实测，不宣称离线测试证明网站适配。
+
 先读取源码和 README，核实实际行为。不要根据旧对话重新实现整个项目。
 
 用户已明确要求：
@@ -22,4 +30,5 @@
 Windows便携EXE：desktop_app.py提供杂志/菜谱启动入口和检查更新按钮。app_runtime.app_root在冻结后必须指向EXE所在文件夹，不能写入PyInstaller解压临时目录。使用--windowed打包，不打开CMD；task_window.py在独立图形任务进程中桥接原input/print，提供停止和继续按钮，保留原续传行为。检查更新读取本仓库GitHub正式Release，下载EXE和SHA256SUMS，校验并运行候选EXE --self-test，独立无控制台helper等旧进程退出后仅替换EXE并自动重启；失败回滚，.updates内保留previous.exe备份。下载任务窗口未关闭时不允许更新。不得覆盖设置、浏览器资料、PDF或进度。VERSION每次正式发布递增。Windows运行build_windows.py打包；GitHub Actions在Windows上运行全部离线测试、EXE界面/提示输入/PDF/无控制台测试及真实helper替换/重启/数据保留测试后发布。不包含浏览器，使用本机Edge/Chrome。不要将用户数据放入发行包。
 
 用户允许跳过杂志原本空白的目录：须识别到正文区域，完整等待至少300秒且末尾30秒持续为空，无正文文字、图片元素、加载/错误/权限提示或其他未支持媒体；关闭弹窗后记录空白并继续，不生成空PDF。缺图、图片加载失败和未识别正文仍终止。合并书签只包含实际保存的章节；总目录记录跳过的空白标题。全书空白保存带校验值的进度记录，pages=0，不生成PDF。短文字也须保留。该功能仅适用于杂志目录模式。
+
 
