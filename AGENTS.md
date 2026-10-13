@@ -19,7 +19,7 @@
 
 爆款菜谱模式：Windows 双击 ebook_collector/start_recipes.bat；共用原设置和登录浏览器，输出到 output_dir/爆款菜谱。每道菜生成独立PDF和JSON，菜谱目录.html提供搜索。仅采集网页版文字及图片，不含APP视频。检测到.locked-content即停止，不将付费预览标记为完整。重启从列表第一页扫描，按菜谱ID和成品校验值跳过已完成项，避免新增内容移动页码导致漏项。原图进度位于爆款菜谱/_work，失败时保留。目录和正文选择器依据公开HTML核实；登录后的完整正文与浏览器PDF打印仍需要实测。
 
-Windows便携EXE：desktop_app.py提供杂志/菜谱启动入口和检查更新按钮。app_runtime.app_root在冻结后必须指向EXE所在文件夹，不能写入PyInstaller解压临时目录。更新检查只读本仓库GitHub正式Release；发现新版打开下载页，由用户关闭程序并替换EXE，不覆盖设置、浏览器资料、PDF或进度。VERSION每次正式发布递增。Windows运行build_windows.py打包；GitHub Actions在Windows上运行全部离线测试、构建、执行EXE --self-test后上传构建产物并发布未存在的版本号。不包含浏览器，使用本机Edge/Chrome。不要将用户数据放入发行包。
+Windows便携EXE：desktop_app.py提供杂志/菜谱启动入口和检查更新按钮。app_runtime.app_root在冻结后必须指向EXE所在文件夹，不能写入PyInstaller解压临时目录。使用--windowed打包，不打开CMD；task_window.py在独立图形任务进程中桥接原input/print，提供停止和继续按钮，保留原续传行为。检查更新读取本仓库GitHub正式Release，下载EXE和SHA256SUMS，校验并运行候选EXE --self-test，独立无控制台helper等旧进程退出后仅替换EXE并自动重启；失败回滚，.updates内保留previous.exe备份。下载任务窗口未关闭时不允许更新。不得覆盖设置、浏览器资料、PDF或进度。VERSION每次正式发布递增。Windows运行build_windows.py打包；GitHub Actions在Windows上运行全部离线测试、EXE界面/提示输入/PDF/无控制台测试及真实helper替换/重启/数据保留测试后发布。不包含浏览器，使用本机Edge/Chrome。不要将用户数据放入发行包。
 
 用户允许跳过杂志原本空白的目录：须识别到正文区域，完整等待至少300秒且末尾30秒持续为空，无正文文字、图片元素、加载/错误/权限提示或其他未支持媒体；关闭弹窗后记录空白并继续，不生成空PDF。缺图、图片加载失败和未识别正文仍终止。合并书签只包含实际保存的章节；总目录记录跳过的空白标题。全书空白保存带校验值的进度记录，pages=0，不生成PDF。短文字也须保留。该功能仅适用于杂志目录模式。
 

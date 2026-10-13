@@ -11,7 +11,10 @@ with patch.object(sys, 'frozen', True, create=True), patch.object(sys, 'executab
 with patch.object(sys, 'frozen', False, create=True):
     assert runtime.app_root() == Path('ebook_collector').resolve()
 release = {'tag_name': 'v1.10.0', 'html_url': update.RELEASES_URL + '/tag/v1.10.0',
-           'assets': [{'name': 'WebDownload.exe'}], 'body': 'New release'}
+           'assets': [{'name': 'WebDownload.exe', 'size': 100,
+                       'browser_download_url': 'https://github.com/zc202302-lab/webdownload/releases/download/v1.10.0/WebDownload.exe'},
+                      {'name': 'SHA256SUMS.txt',
+                       'browser_download_url': 'https://github.com/zc202302-lab/webdownload/releases/download/v1.10.0/SHA256SUMS.txt'}], 'body': 'New release'}
 assert update.parse_release(release, '1.9.0')['available']
 assert not update.parse_release(release, '1.10.0')['available']
 assert not update.parse_release(release, '2.0.0')['available']

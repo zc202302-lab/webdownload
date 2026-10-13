@@ -39,7 +39,7 @@ jobs:
           $version = python -c "import sys; sys.path.insert(0,'ebook_collector'); from app_runtime import VERSION; print(VERSION)"
           gh release view "v$version" --repo "$env:GITHUB_REPOSITORY" *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "v$version" dist/WebDownload.exe dist/SHA256SUMS.txt --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "WebDownload v$version" --notes "Windows x64 portable EXE. Includes magazine and recipe downloads, resume verification and a Check for updates button. Requires installed Microsoft Edge or Google Chrome. Keep settings.json, output and browser_profile folders when replacing the EXE."
+            gh release create "v$version" dist/WebDownload.exe dist/SHA256SUMS.txt --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "WebDownload v$version" --notes "Windows x64 windowless portable EXE. Graphical magazine and recipe tasks. Check for updates automatically downloads, verifies, replaces and restarts the application. User settings, browser profiles, downloads and progress are preserved. Requires Microsoft Edge or Google Chrome. Older versions need one manual EXE replacement to enable automatic updates."
             if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
           }
           exit 0
