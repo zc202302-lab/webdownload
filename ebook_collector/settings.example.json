@@ -1,0 +1,11 @@
+{
+  "output_dir": "output",
+  "reserve_gb": 20,
+  "years": "all",
+  "keep_page_images": false,
+  "start_year": null,
+  "reading_mode": "chapters",
+  "chapter_wait_seconds": 300,
+  "chapter_min_short_edge": 1000,
+  "chapter_min_long_edge": 1400
+}
