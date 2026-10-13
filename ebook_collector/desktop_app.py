@@ -85,7 +85,7 @@ def self_test_update():
     import shutil
     from auto_updater import digest
     with tempfile.TemporaryDirectory() as folder:
-        root = Path(folder)
+        root = Path(folder).resolve()
         target = root / 'WebDownload.exe'
         shutil.copy2(sys.executable, target)
         staged = root / '.updates' / 'test'
@@ -108,7 +108,7 @@ def self_test_update():
         assert code == 0, error.read_text() if error.exists() else 'updater helper failed'
         assert parent.wait(timeout=30) == 0
         marker = json.loads((staged / 'restarted.json').read_text())
-        assert marker['version'] == VERSION and Path(marker['root']) == root and not marker['console']
+        assert marker['version'] == VERSION and Path(marker['root']).resolve() == root and not marker['console'], (marker, str(root))
         assert all(path.read_bytes() == b'preserve-user-data' for path in preserved)
         assert (staged / 'previous.exe').exists() and target.exists()
     if '--self-test-result' in sys.argv:
