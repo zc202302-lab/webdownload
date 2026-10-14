@@ -190,8 +190,8 @@ with tempfile.TemporaryDirectory() as folder:
     frame = Frame(clock)
     frame.current = 3
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()):
-        expect_failure(lambda: books.wait_pages(frame, 2, 3, SETTINGS, work), '至少60秒')
-    assert clock.now >= 60
+        expect_failure(lambda: books.wait_pages(frame, 2, 3, SETTINGS, work), '跳过')
+    assert clock.now < 60 and (work/'diagnostic.json').exists()
 
     class Button:
         def filter(self, **kwargs):

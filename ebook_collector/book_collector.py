@@ -160,6 +160,9 @@ def wait_pages(frame, expected, total, settings, work):
         selected = {n: [im for im in images if page_number(im['src']) == n] for n in pages}
         snapshot = {'page_field': value, 'requested_page': expected,
                     'image_pages': [page_number(im['src']) for im in images]}
+        if pages[0] > expected:
+            save_json(work / 'diagnostic.json', snapshot)
+            raise RuntimeError(f'翻页跳过了尚未保存的第{expected}页，已停止并保留进度。')
         if expected in pages and all(selected[n] and all(im['ready'] for im in selected[n]) for n in pages):
             signature = json.dumps([pages, selected], sort_keys=True)
             if previous != signature:
@@ -173,9 +176,59 @@ def wait_pages(frame, expected, total, settings, work):
     raise RuntimeError(f'第{expected}页或图片未完整加载，等待至少60秒后终止。')
 
 
-def next_arrow(frame):
+ARROW_NODES = 'button,a,input[type="button"],[role="button"],img,svg,[onclick],[id],[class]'
+ARROW_PROBE = r'''es => {
+  const field=document.querySelector('#currentPageIndexTextField');
+  if(!field) return [];
+  const fr=field.getBoundingClientRect();
+  const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+    return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden'
+      && !e.disabled && e.getAttribute('aria-disabled')!=='true';};
+  const rank=e=>{
+    const tokens=[e.id,e.getAttribute('class'),e.getAttribute('title'),e.getAttribute('alt'),
+      e.getAttribute('aria-label'),e.getAttribute('data-tooltip')].filter(Boolean);
+    for(const raw of [e.getAttribute('src'),getComputedStyle(e).backgroundImage]) {
+      if(raw) tokens.push(raw.split('/').pop().split(/[?#]/)[0].replace(/["')]/g,''));
+    }
+    let score=0;
+    for(const token of tokens) {
+      for(const part of token.split(/\s+/)) {
+        const word=part.toLowerCase().replace(/\.(png|gif|svg|jpe?g|webp)$/,'').replace(/[-_]/g,'');
+        if(/^(next(page)?(button|btn|arrow|icon)?|btnnext(page)?|buttonnext(page)?|nextbtn|下一页)$/.test(word)) score=Math.max(score,2);
+        if(/^(right(button|btn|arrow|icon|page)?|arrowright|btnright|pageright)$/.test(word)) score=Math.max(score,1);
+      }
+    }
+    const joined=tokens.join(' ').toLowerCase();
+    if(/last|first|endpage|nextchapter|fullscreen|末页|首页|下一章/.test(joined)) return 0;
+    return score;
+  };
+  const found=new Map();
+  es.forEach((e,index)=>{
+    if(!visible(e)) return;
+    const r=e.getBoundingClientRect();
+    // Only the page-number toolbar: never click a next/right image in the book.
+    if(Math.abs((r.top+r.height/2)-(fr.top+fr.height/2))>Math.max(36,fr.height*2)
+      || r.width>120 || r.height>120) return;
+    const score=rank(e);if(!score) return;
+    const target=e.closest('button,a,[role="button"],[onclick]') || e;
+    if(!visible(target)) return;
+    const targetIndex=es.indexOf(target);if(targetIndex<0) return;
+    const old=found.get(target);
+    if(!old || score>old.score) found.set(target,{index:targetIndex,score,tag:target.tagName,
+      id:(target.id||'').slice(0,80),class_name:(target.getAttribute('class')||'').slice(0,120)});
+  });
+  // Nested DIV wrappers and their icon represent the same control.
+  const rows=[...found.entries()].filter(([e])=>![...found.keys()].some(other=>other!==e && e.contains(other)));
+  const best=Math.max(0,...rows.map(([,row])=>row.score));
+  return rows.map(([,row])=>row).filter(row=>row.score===best);
+}'''
+
+
+def next_arrow(frame, work=None):
     # Common FlipBook toolbar identifiers; semantic labels cover variants.
     selectors = ('#nextPageButton', '#nextPage', '#next', '#btnNext', '.nextPageButton',
+                 '#nextPageBtn', '#nextButton', '.next-button', '.next-page',
+                 '.nextPage', '#rightButton', '#rightPage', '#rightBtn',
                  '[title="Next Page"]', '[title="Next page"]', '[title="下一页"]',
                  '[aria-label="Next Page"]', '[aria-label="下一页"]')
     for selector in selectors:
@@ -188,6 +241,14 @@ def next_arrow(frame):
     if controls.count() == 1 and controls.is_visible():
         controls.click(timeout=10000)
         return
+    nodes=frame.locator(ARROW_NODES)
+    candidates=nodes.evaluate_all(ARROW_PROBE) if nodes.count() else []
+    if len(candidates)==1:
+        nodes.nth(candidates[0]['index']).click(timeout=10000)
+        return
+    if work is not None:
+        save_json(work / 'navigation_diagnostic.json', {'reason':'下一页箭头未唯一识别',
+                   'candidates':candidates})
     raise RuntimeError('无法唯一识别阅读器下一页箭头，已停止；请提供阅读器页面结构以便适配。')
 
 
@@ -231,7 +292,7 @@ def collect_book(context, frame, total, item, store, settings):
                 print(f'[{number}/{total}] 校验通过，复用已保存页')
         expected = pages[-1]+1
         if expected <= total:
-            next_arrow(frame)
+            next_arrow(frame, work)
     images = [work / f'{n:04d}.jpg' for n in range(1, total+1)]
     if not all(verified(p, manifest['pages'].get(str(n), {}).get('sha256')) for n,p in enumerate(images,1)):
         raise RuntimeError('全书页面校验失败，未生成PDF。')

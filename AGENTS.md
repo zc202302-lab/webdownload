@@ -1,5 +1,7 @@
 # 接续开发
 
+v1.0.10电子书下一页按钮增加名称变体及ARROW_PROBE图标备用识别：只在页码框同一工具栏行匹配next/right图片或背景图，排除first/last/下一章等，合并嵌套候选、唯一才点击。不使用固定屏幕坐标或猜图片URL。未识别时保留navigation_diagnostic.json；wait_pages页码跳过expected时立即保存diagnostic.json并停止，页码和原图编号仍双重校验。tests/test_reader_navigation.py用Node执行实际探测JS并覆盖嵌套图标、背景图、歧义/禁用/末页/正文排除；登录后实际箭头仍需用户复测。
+
 v1.0.9综合修复：locate_chapter_modal优先可见真实弹窗与顶层标题，不再按正文重复标题找含p/img的最近容器；resolveBody提供已确认弹窗内正文备用识别，拒绝BODY/HTML和无内容未知区域；滚动包含弹窗外层祖先，每10秒输出未通过条件。生产下载移到独立进程，task_process.py通过仅绑定127.0.0.1且带随机验证值的IPC桥接提示/日志；停止先协作取消，2秒仍阻塞则结束本下载进程树，已有原子写入进度保留。窗口仍须关闭才能更新。新更新helper复制已校验候选EXE，真实主窗口事件循环写startup.json确认，45秒无确认/提前退出则保存error.txt、回滚并重启原程序；旧版首次自动更新若仍失败需手动替换EXE。
 电子书扫描只按新增书籍ID重置进度，不以页面高度变化重置；“加载更多”明确隐藏且无加载状态、30秒无新增即可结束，不因底部几像素抖动继续扫描。电子书及爆款菜谱都通过download_paths.category_root放到output_path.parent/分类名，后续分类沿用此函数；旧output内分类整体迁移，仅当新位置不存在，新旧均存在则不覆盖而提示保留。桌面“打开下载目录”打开共同父目录。
 find_reader自动处理旧Flash/mobile/html5提示中的可见here链接，已有阅读器时不点击；recover_reader处理翻页后阅读器重建并恢复待保存页，保持总页数/图片完整性检查。tests新增modal_scope/task_process/download_paths/reader_entry及高度抖动/启动确认回滚测试；Windows自检额外运行真实冻结worker停止与启动确认。
