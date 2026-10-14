@@ -46,6 +46,26 @@ def parse_release(data, current=VERSION):
             'checksum_url': selected['SHA256SUMS.txt']['browser_download_url'], 'size': size}
 
 
+def check_public_release():
+    """Public web fallback avoids the unauthenticated API quota."""
+    headers={'User-Agent':'WebDownload/'+VERSION}
+    with urlopen(Request(RELEASES_URL+'/latest',headers=headers),timeout=20) as response:
+        url=response.geturl()
+    match=re.fullmatch(re.escape(RELEASES_URL)+r'/tag/(v?\d+\.\d+\.\d+)',url)
+    if not match:
+        raise RuntimeError('备用更新入口未返回本项目正式版本。')
+    tag=match[1]
+    prefix=f'https://github.com/{REPO}/releases/download/{tag}/'
+    # Read real asset length, rather than guessing metadata or trusting a mirror.
+    with urlopen(Request(prefix+'WebDownload.exe',headers=headers,method='HEAD'),timeout=30) as response:
+        length=response.headers.get('Content-Length','')
+    if not re.fullmatch(r'\d+',length):
+        raise RuntimeError('备用更新入口未提供程序大小，请手动下载正式发布版。')
+    return parse_release({'tag_name':tag,'html_url':url,'assets':[
+        {'name':'WebDownload.exe','browser_download_url':prefix+'WebDownload.exe','size':int(length)},
+        {'name':'SHA256SUMS.txt','browser_download_url':prefix+'SHA256SUMS.txt'}]})
+
+
 def check_update():
     request = Request(API_URL, headers={'Accept': 'application/vnd.github+json',
                                        'User-Agent': 'WebDownload/' + VERSION})
@@ -59,7 +79,10 @@ def check_update():
         if exc.code == 404:
             raise RuntimeError('尚未发布正式EXE版本，请稍后再检查。') from None
         if exc.code in (403, 429):
-            raise RuntimeError('更新服务暂时限制请求，请稍后重试。') from None
+            try:
+                return check_public_release()
+            except Exception as fallback:
+                raise RuntimeError(f'GitHub API查询受限（HTTP {exc.code}），正式发布页备用查询也失败：{fallback}。可从本项目发布页手动下载EXE。') from None
         raise RuntimeError(f'更新服务返回HTTP {exc.code}') from None
 
 
@@ -107,3 +130,4 @@ def download_update(release, root, progress=None):
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
         raise
+

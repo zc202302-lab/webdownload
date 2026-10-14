@@ -10,6 +10,35 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path('ebook_collector').resolve()))
 import update_checker as checks
 import auto_updater as updater
+from urllib.error import HTTPError
+
+class WebResponse(io.BytesIO):
+    def __init__(self,url,size='12345'):
+        super().__init__(b'');self.url=url;self.headers={'Content-Length':size}
+    def geturl(self):return self.url
+
+for status in (403,429):
+    calls=[]
+    def limited(request,**kwargs):
+        calls.append(request)
+        if request.full_url==checks.API_URL:
+            raise HTTPError(checks.API_URL,status,'limited',{},None)
+        if request.full_url==checks.RELEASES_URL+'/latest':
+            return WebResponse(checks.RELEASES_URL+'/tag/v99.0.0')
+        assert request.get_method()=='HEAD'
+        return WebResponse(request.full_url)
+    with patch.object(checks,'urlopen',side_effect=limited):
+        found=checks.check_update()
+    assert found['available'] and found['size']==12345 and found['version']=='v99.0.0'
+    assert len(calls)==3
+for url,size in [('https://evil.test/tag/v99.0.0','12345'),
+                 (checks.RELEASES_URL+'/tag/v99.0.0',''),
+                 (checks.RELEASES_URL+'/tag/v99.0.0','99999999999')]:
+    with patch.object(checks,'urlopen',return_value=WebResponse(url,size)):
+        try:checks.check_public_release()
+        except (RuntimeError,ValueError):pass
+        else:raise AssertionError('invalid fallback accepted')
+print('PASS: API 403/429 public release fallback, real asset length and invalid metadata rejection')
 
 payload = b'MZnew-Windows-program'
 expected = hashlib.sha256(payload).hexdigest()
