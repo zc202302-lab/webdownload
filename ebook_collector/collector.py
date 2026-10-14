@@ -193,81 +193,138 @@ def load_year(page, year):
     return rows
 
 
+def download_magazine_once(context, task, library, settings):
+    library.check_space()
+    library.register(task)['active_operation']={'stage':'打开杂志详情页'}
+    baseline=set(context.pages)
+    work_page=context.new_page()
+    try:
+        response=work_page.goto(task['source'],wait_until='domcontentloaded',timeout=45000)
+        if response and response.status in (401,403,429):
+            raise PermissionError(f'网站返回{response.status}，请核查阅读权限。')
+        if response and not response.ok:
+            raise RuntimeError(f'详情页返回HTTP {response.status}')
+        if settings.get('reading_mode')=='chapters':
+            return collect_chapters(context,work_page,task,library,settings,build_pdf)
+        library.register(task)['active_operation']={'stage':'打开整本阅读器'}
+        immediate=work_page.get_by_text('立即阅读',exact=True)
+        immediate.first.wait_for(state='visible',timeout=5000)
+        immediate.first.click(timeout=10000)
+        work_page.wait_for_timeout(300)
+        reader_pages=[work_page]+[p for p in context.pages if p not in baseline]
+        try:
+            activate_mobile_reader(context,pages=reader_pages)
+            reader_pages=[work_page]+[p for p in context.pages if p not in baseline]
+            frame,text,_=find_reader(context,pages=reader_pages)
+        except RuntimeError:
+            print('整本阅读器未加载，改用杂志目录正文采集……')
+            for popup in list(context.pages):
+                if popup is not work_page and popup not in baseline and not popup.is_closed():
+                    popup.close()
+            work_page.goto(task['source'],wait_until='domcontentloaded',timeout=45000)
+            return collect_chapters(context,work_page,task,library,settings,build_pdf)
+        match=re.search(r'/\s*(\d+)',text)
+        if not match:
+            raise RuntimeError(f'无法识别页数：{text}')
+        collect(context,frame,int(match.group(1)),task,library,settings)
+    finally:
+        for popup in list(context.pages):
+            if popup not in baseline and not popup.is_closed():
+                popup.close()
+
+
+def restart_magazine(library, task, prior_events):
+    import copy
+    output,work=library.paths(task)
+    archive=work.parent/f'{work.name}_首次失败备份_{time.time_ns()}'
+    archive.parent.mkdir(parents=True,exist_ok=True)
+    if work.exists():
+        work.rename(archive)
+    else:
+        archive.mkdir()
+    if output.exists():
+        output.rename(archive/'previous_output.pdf')
+    book=library.register(task)
+    for key in ('pdf','sha256','pages','bytes','empty_record','empty_record_sha256','missing_images','active_operation'):
+        book.pop(key,None)
+    book['failure_events']=copy.deepcopy(prior_events)
+    library.update(task,'从头重试中',reason='')
+    print('首次失败进度已保留；当前杂志将从头完整重下，不复用这一轮章节或图片。')
+
+
+def run_magazine_with_retry(context, task, library, settings):
+    import copy
+    from missing_records import record_failure,resolve_failures,write_missing_report
+    prior_events=copy.deepcopy(library.register(task).get('failure_events',{}))
+    previous_defer=getattr(library,'defer_missing_report',False)
+    library.defer_missing_report=True
+    try:
+        for attempt in range(2):
+            library.update(task,'处理中' if attempt==0 else '从头重试中',reason='')
+            try:
+                download_magazine_once(context,task,library,settings)
+            except (StorageFull,PermissionError) as exc:
+                # These require user intervention; do not re-request a denied
+                # resource or attempt more writes on an exhausted disk.
+                library.defer_missing_report=False
+                library.update(task,'已暂停',reason=str(exc))
+                record_failure(library,task,exc)
+                write_missing_report(library)
+                raise
+            except Exception as exc:
+                if attempt==0:
+                    print(f'当前杂志首次失败，准备从头重试一次：{task["title"]}')
+                    try:
+                        restart_magazine(library,task,prior_events)
+                        exc._missing_report_recorded=False
+                    except Exception as reset_error:
+                        library.defer_missing_report=False
+                        library.register(task)['active_operation']={'stage':'准备从头重试'}
+                        record_failure(library,task,reset_error)
+                        raise
+                    continue
+                library.defer_missing_report=False
+                library.update(task,'未完成已终止',reason=str(exc)[:500])
+                record_failure(library,task,exc)
+                write_missing_report(library)
+                raise RuntimeError(f'《{task["title"]}》从头重试后仍失败，整批采集已终止，进度保留：{exc}') from exc
+            else:
+                library.defer_missing_report=False
+                resolve_failures(library,task)
+                return
+    finally:
+        library.defer_missing_report=previous_defer
+
+
 def batch_all_years(context, list_page, settings, library):
-    years = discover_years(list_page, settings)
+    years=discover_years(list_page,settings)
     print(f'发现 {len(years)} 个年份：{years}')
     print(f'资料库：{library.root}；磁盘可用 {library.check_space()/1e9:.1f}GB，预留 {library.reserve/1e9:.0f}GB')
     for year in years:
         library.check_space()
         print(f'\n===== {year} 年 =====')
-        tasks = load_year(list_page, year)
-        library.db['years'][str(year)] = {'found': len(tasks), 'updated': time.strftime('%Y-%m-%d %H:%M:%S')}
+        tasks=load_year(list_page,year)
+        library.db['years'][str(year)]={'found':len(tasks),'updated':time.strftime('%Y-%m-%d %H:%M:%S')}
         for task in tasks:
             library.register(task)
         library.flush()
         print(f'发现 {len(tasks)} 本书。')
-        for position, task in enumerate(tasks, 1):
+        for position,task in enumerate(tasks,1):
             if library.done(task):
                 print(f'[{position}/{len(tasks)}] 已完成，跳过：{task["title"]}')
                 continue
-            library.check_space()
-            library.update(task, '处理中', reason='')
-            work_page = context.new_page()
-            baseline = set(context.pages)
-            try:
-                response = work_page.goto(task['source'], wait_until='domcontentloaded', timeout=45000)
-                if response and response.status in (401, 403, 429):
-                    raise PermissionError(f'网站返回 {response.status}，暂停以便检查登录或访问限制。')
-                if settings.get('reading_mode') == 'chapters':
-                    collect_chapters(context,work_page,task,library,settings,build_pdf)
-                    continue
-                immediate = work_page.get_by_text('立即阅读', exact=True)
-                try:
-                    immediate.first.wait_for(state='visible', timeout=5000)
-                except PlaywrightError:
-                    raise RuntimeError('详情页未显示立即阅读，当前书未完成。')
-                print(f'[{position}/{len(tasks)}] 阅读：{task["title"]}')
-                immediate.first.click(timeout=10000)
-                work_page.wait_for_timeout(300)
-                reader_pages = [work_page] + [p for p in context.pages if p not in baseline]
-                try:
-                    activate_mobile_reader(context, pages=reader_pages)
-                    reader_pages = [work_page] + [p for p in context.pages if p not in baseline]
-                    frame, text, reader_title = find_reader(context, pages=reader_pages)
-                except RuntimeError:
-                    print('整本阅读器未加载，改用杂志目录正文采集……')
-                    for popup in list(context.pages):
-                        if popup not in baseline and not popup.is_closed():
-                            popup.close()
-                    work_page.goto(task['source'],wait_until='domcontentloaded',timeout=45000)
-                    collect_chapters(context,work_page,task,library,settings,build_pdf)
-                    continue
-                match = re.search(r'/\s*(\d+)', text)
-                if not match:
-                    raise RuntimeError(f'无法识别页数：{text}')
-                collect(context, frame, int(match.group(1)), task, library, settings)
-            except (StorageFull, PermissionError) as exc:
-                library.update(task, '已暂停', reason=str(exc))
-                raise
-            except Exception as exc:
-                library.update(task, '未完成已终止', reason=str(exc)[:500])
-                raise RuntimeError(f'《{task["title"]}》未完成，整批采集已终止，进度保留：{exc}') from exc
-            finally:
-                for popup in list(context.pages):
-                    if popup is work_page or popup not in baseline:
-                        if not popup.is_closed():
-                            popup.close()
+            run_magazine_with_retry(context,task,library,settings)
     library.flush()
-    counts = {}
+    counts={}
     for book in library.db['books'].values():
-        counts[book['status']] = counts.get(book['status'], 0) + 1
+        counts[book['status']]=counts.get(book['status'],0)+1
     print(f'批量结束：{counts}。请打开“书库目录.html”查看。')
 
 
 def collect(context, frame, total, task, library, settings):
-    output, folder = library.paths(task)
-    folder.mkdir(parents=True, exist_ok=True)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output,folder=library.paths(task)
+    folder.mkdir(parents=True,exist_ok=True)
+    output.parent.mkdir(parents=True,exist_ok=True)
     recorded_hash = library.register(task).get('sha256')
     if output.exists() and (not recorded_hash or file_hash(output) == recorded_hash):
         # Recover a PDF committed just before an interrupted metadata write.
@@ -286,6 +343,7 @@ def collect(context, frame, total, task, library, settings):
         raise RuntimeError('页数与原进度不一致，请核查书籍。')
     field = frame.locator('#currentPageIndexTextField')
     for number in range(1, total + 1):
+        library.register(task)['active_operation']={'stage':'整本阅读器逐页采集','image_position':number}
         library.check_space()
         path = folder / f'{number:04d}.jpg'
         existing = manifest['pages'].get(str(number))

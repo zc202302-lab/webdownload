@@ -93,7 +93,7 @@ def run():
         def click(self,**kw):pass
     class Page:
         def __init__(self,context):self.context=context;self.closed=False
-        def goto(self,*args,**kwargs):return types.SimpleNamespace(status=200)
+        def goto(self,*args,**kwargs):return types.SimpleNamespace(status=200,ok=True)
         def get_by_text(self,*args,**kwargs):return Immediate()
         def wait_for_timeout(self,*args):pass
         def is_closed(self):return self.closed
@@ -115,9 +115,10 @@ def run():
             assert '整批采集已终止' in str(exc)
         else:
             raise AssertionError('failed book did not stop batch')
-    assert calls==['fails'] and library.db['books']['fails']['status']=='未完成已终止'
+    assert calls==['fails','fails'] and library.db['books']['fails']['status']=='未完成已终止'
     assert not context.pages
     print('PASS: PDF validation, index links, checksums, disk reserve, resume, year ordering, stop-on-incomplete and tab cleanup')
     print(pdf)
 
 run()
+

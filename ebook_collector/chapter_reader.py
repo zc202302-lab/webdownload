@@ -333,6 +333,22 @@ def close_chapter(modal):
 
 
 def collect_chapters(context, page, task, library, settings, build_pdf):
+    from missing_records import record_failure,resolve_failures
+    library.register(task)['active_operation']={'stage':'识别杂志目录'}
+    try:
+        result=_collect_chapters(context,page,task,library,settings,build_pdf)
+    except Exception as exc:
+        try:
+            record_failure(library,task,exc)
+        except Exception:
+            print('本次错误记录无法写入，请检查资料库磁盘空间或文件写入权限。')
+        raise
+    else:
+        resolve_failures(library,task)
+        return result
+
+
+def _collect_chapters(context, page, task, library, settings, build_pdf):
     entries = catalog_entries(page)
     if not entries:
         raise RuntimeError('未识别到杂志目录条目。请提供这本书的详情页网址以便适配。')
@@ -350,6 +366,8 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
     rendered_entries=[]
     blank_entries=[]
     for index, expected in enumerate(entries):
+        operation={'stage':'检查空间及续传文件','chapter_position':index+1,'chapter_title':expected}
+        library.register(task)['active_operation']=operation
         library.check_space()
         chapter_pdf=work/f'chapter_{index+1:04d}.pdf'
         complete=progress.get('completed_entries',{}).get(str(index))
@@ -369,10 +387,13 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
                 print(f'目录 {index+1}/{len(entries)} 已完整保存，跳过：{expected}')
                 continue
         print(f'打开杂志目录 {index+1}/{len(entries)}：{expected}')
+        operation['stage']='打开目录正文'
         page.get_by_text(expected,exact=True).first.click(timeout=10000)
         print(f'等待正文目录 {index+1}/{len(entries)} 完整加载……')
         wait_settings=dict(settings,_allow_missing_images=True,_diagnostic_path=work/f'chapter_{index+1:04d}_diagnostic.json')
+        operation['stage']='等待正文加载与完整性检查'
         sources,signature,modal=wait_chapter(page,expected,None,wait_settings)
+        operation['stage']='保存前正文复查'
         snapshot=body_snapshot(modal,re.sub(r'^\s*\d+\s+','',expected))
         if snapshot.get('restricted'):
             raise PermissionError(f'保存前发现正文权限锁定：{expected}')
@@ -382,6 +403,7 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         if not all(url in captured for url in snapshot.get('image_urls',[])):
             raise RuntimeError(f'正文在保存前发生变化，图片列表不一致：{expected}')
         if empty_body(snapshot,sources):
+            operation['stage']='关闭空白正文弹窗'
             close_chapter(modal)
             progress.setdefault('completed_entries',{})[str(index)]={'empty':True,'title':expected}
             save_json(progress_path,progress)
@@ -395,6 +417,7 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         chapter_images=[]
         mapping={}
         for image_index, item in enumerate(sources):
+            operation.update(stage='下载及校验正文原图',image_position=image_index+1)
             path = work / f'chapter_{index+1:04d}_{image_index+1:03d}.jpg'
             key = f'{index}:{image_index}'
             old = progress['chapters'].get(key)
@@ -434,22 +457,29 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
             mapping[item['src']]=path
             mapping[item.get('dom_src',item['src'])]=path
             print(f'正文目录 {index+1}/{len(entries)}，原图{size[0]}×{size[1]}')
+        operation.pop('image_position',None)
+        operation['stage']='检查PDF导出空间'
         library.check_space(sum(p.stat().st_size for p in chapter_images)*3+64*1024*1024)
         if not chapter_images and not mixed:
+            operation['stage']='关闭缺图正文弹窗'
             close_chapter(modal)
             progress.setdefault('completed_entries',{})[str(index)]={'missing_only':True,'title':expected}
             save_json(progress_path,progress)
             continue
         if mixed:
+            operation['stage']='导出图文正文PDF'
             print_body(context,snapshot,mapping,chapter_pdf)
         else:
+            operation['stage']='生成图片正文PDF'
             build_pdf(chapter_images,chapter_pdf)
         pages=validate_pdf(chapter_pdf)
+        operation['stage']='关闭正文弹窗'
         close_chapter(modal)
         progress.setdefault('completed_entries',{})[str(index)]={'sha256':file_hash(chapter_pdf),'pages':pages,'images':{p.name:file_hash(p) for p in chapter_images}}
         save_json(progress_path,progress)
         chapter_pdfs.append(chapter_pdf)
         rendered_entries.append(expected)
+    library.register(task)['active_operation']={'stage':'整本PDF合并及完成记录校验'}
     if not chapter_pdfs:
         library.update(task,'已完成',pdf='',pages=0,bytes=0,mode='目录正文',
                        blank_entries=blank_entries,chapter_count=len(entries),
