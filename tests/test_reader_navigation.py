@@ -17,7 +17,7 @@ script=r'''
 const probe=PROBE;
 const assert=require('assert');
 function node(attrs={},top=500,parent=null){
-  const n={id:attrs.id||'',tagName:attrs.tag||'IMG',disabled:false,parent,
+  const n={id:attrs.id||'',tagName:attrs.tag||'IMG',disabled:false,parent,textContent:attrs.text||'',
     getAttribute:k=>attrs[k]||null,
     getBoundingClientRect:()=>({top,height:24,width:24}),
     contains:other=>{for(let p=other.parent;p;p=p.parent)if(p===n)return true;return false;},
@@ -43,6 +43,13 @@ assert.deepStrictEqual(probe([field,bg]).map(x=>x.index),[1]);
 assert.strictEqual(probe([field,next,node({src:'/img/next.png'})]).length,2);
 assert.strictEqual(probe([field,node({src:'/img/next.png'},150)]).length,0);
 assert.strictEqual(probe([field,node({class:'next-page last-page'})]).length,0);
+// User's actual control: generic DIV + embedded PNG + noninteractive text SPAN.
+const labeled=node({tag:'DIV',class:'button',text:'下一页'});
+const generic1=node({tag:'DIV',class:'button right',text:'末页'});
+const generic2=node({tag:'DIV',class:'button right',text:'前进'});
+assert.deepStrictEqual(probe([field,generic1,labeled,generic2]).map(x=>x.index),[2]);
+const arrowImage=node({src:'data:image/png;base64,example'},500,labeled);
+assert.deepStrictEqual(probe([field,labeled,arrowImage,generic1,generic2]).map(x=>x.index),[1]);
 next.disabled=true;assert.strictEqual(probe([field,next]).length,0);
 console.log('PASS: actual arrow JS handles image/background icons, nested controls, rejects ambiguity, last-page, disabled and content images');
 '''.replace('PROBE',books.ARROW_PROBE)

@@ -1,5 +1,7 @@
 # 接续开发
 
+v1.0.12用户提供实际下一页HTML：DIV.button内嵌data:PNG和pointer-events:none的SPAN“下一页”。ARROW_PROBE额外读取精确textContent标签，nextpage语义优先于三个button right通用候选，点击外层DIV；不依赖left:712px等固定坐标。新增真实结构回归。
+
 v1.0.11更新API返回403/429时备用查询github.com本项目/releases/latest真实重定向正式tag，以EXE的HEAD Content-Length取得实际大小，仍要求parse_release项目地址/版本/大小检查及SHA256/候选自检。备用也失败明确显示两阶段原因与手动更新方式；不添加Token/第三方镜像。旧EXE不会自动获得修复，查询受限时首次需手动替换。
 
 v1.0.10电子书下一页按钮增加名称变体及ARROW_PROBE图标备用识别：只在页码框同一工具栏行匹配next/right图片或背景图，排除first/last/下一章等，合并嵌套候选、唯一才点击。不使用固定屏幕坐标或猜图片URL。未识别时保留navigation_diagnostic.json；wait_pages页码跳过expected时立即保存diagnostic.json并停止，页码和原图编号仍双重校验。tests/test_reader_navigation.py用Node执行实际探测JS并覆盖嵌套图标、背景图、歧义/禁用/末页/正文排除；登录后实际箭头仍需用户复测。

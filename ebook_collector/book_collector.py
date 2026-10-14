@@ -187,6 +187,9 @@ ARROW_PROBE = r'''es => {
   const rank=e=>{
     const tokens=[e.id,e.getAttribute('class'),e.getAttribute('title'),e.getAttribute('alt'),
       e.getAttribute('aria-label'),e.getAttribute('data-tooltip')].filter(Boolean);
+    // This reader labels generic DIV buttons with a pointer-events:none SPAN.
+    const label=(e.textContent||'').trim();
+    if(/^(下一页|next\s*(page)?)$/i.test(label)) tokens.push('nextpage');
     for(const raw of [e.getAttribute('src'),getComputedStyle(e).backgroundImage]) {
       if(raw) tokens.push(raw.split('/').pop().split(/[?#]/)[0].replace(/["')]/g,''));
     }
