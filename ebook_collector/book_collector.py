@@ -263,25 +263,13 @@ def collect_book(context, frame, total, item, store, settings):
         'source': item['source'], 'total': total, 'pages': {}}
     if manifest['total'] != total or book_identifier(manifest['source']) != book_identifier(item['source']):
         raise RuntimeError('阅读器总页数或书籍与原进度不一致，已停止。')
-    # Check actual files, not only a saved page counter: a damaged earlier page
-    # must be repaired even when later pages already exist.
-    expected = total+1
-    for number in range(1,total+1):
-        store.storage.check_space()
-        old=manifest['pages'].get(str(number),{})
-        if not old.get('sha256') or not verified(work/f'{number:04d}.jpg',old['sha256']):
-            expected=number
-            break
-    if expected<=total:
-        initial=displayed_pages(frame.locator('#currentPageIndexTextField').input_value(),total)
-        if expected not in initial:
-            # One startup seek; subsequent navigation still uses the arrow.
-            field=frame.locator('#currentPageIndexTextField')
-            field.fill(str(expected))
-            field.press('Enter')
-        print(f'继续下载：前{expected-1}页已校验，从第{expected}页开始。')
-    else:
-        print(f'全部{total}页原图已校验，直接继续生成PDF。')
+    initial = displayed_pages(frame.locator('#currentPageIndexTextField').input_value(), total)
+    if initial[0] != 1:
+        # Only rewind at startup. Subsequent navigation always clicks the arrow.
+        field = frame.locator('#currentPageIndexTextField')
+        field.fill('1')
+        field.press('Enter')
+    expected = 1
     while expected <= total:
         store.storage.check_space()
         frame=recover_reader(frame,settings,expected)

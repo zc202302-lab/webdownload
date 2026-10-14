@@ -75,7 +75,6 @@ class Field:
 
     def press(self, key):
         assert key == 'Enter'
-        self.frame.seeks.append(self.value)
         self.frame.current = self.value
 
 
@@ -103,7 +102,6 @@ class Frame:
     def __init__(self, clock, total=3, double=False, missing=False):
         self.clock, self.total, self.double, self.missing = clock, total, double, missing
         self.current, self.clicks = 1, 0
-        self.seeks = []
 
     def pages(self):
         if self.double and self.current == 2:
@@ -165,7 +163,7 @@ with tempfile.TemporaryDirectory() as folder:
         with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()), patch.object(books, 'download_best', download):
             pdf, work = books.collect_book(None, frame, 3, ITEM, store, SETTINGS)
         assert validate_pdf(pdf, 3) == 3
-        assert frame.clicks == (0 if double else 2)
+        assert frame.clicks == (1 if double else 2)
         assert work.exists() and not store.done(ITEM)  # Not committed until close.
     assert downloads == [1,2,3]  # Second run reused checksummed original pages.
     _, work = store.paths(ITEM)
@@ -175,16 +173,6 @@ with tempfile.TemporaryDirectory() as folder:
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()), patch.object(books, 'download_best', download):
         books.collect_book(None, frame, 3, ITEM, store, SETTINGS)
     assert downloads == [1,2,3,2]
-    assert frame.seeks==[2] and frame.clicks==1  # Repairs the first bad page directly.
-    # Resume an interrupted download at the first missing page, not page 1.
-    progress=json.loads((work/'progress.json').read_text())
-    del progress['pages']['3']
-    (work/'progress.json').write_text(json.dumps(progress))
-    (work/'0003.jpg').unlink()
-    clock=Clock();frame=Frame(clock)
-    with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'reader_images',lambda f:f.images()),patch.object(books,'download_best',download):
-        books.collect_book(None,frame,3,ITEM,store,SETTINGS)
-    assert frame.seeks==[3] and frame.clicks==0 and downloads==[1,2,3,2,3]
     clock = Clock()
     frame = Frame(clock, missing=True)
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()):
