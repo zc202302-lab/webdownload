@@ -68,7 +68,7 @@ class TaskProcess:
                         kill_tree(self.process)
                         self.events.put(('done','已停止；已保存的进度保留，未完成内容将在下次重新检查。'))
                         return
-                if self.process.poll() is not None:
+                if connection is None and self.process.poll() is not None:
                     if not received_done:
                         self.events.put(('done','已停止，进度保留。' if self.cancel.is_set() else '下载进程退出，已保存的进度保留。请查看日志。'))
                     return
@@ -82,7 +82,12 @@ class TaskProcess:
                     connection.sendall((json.dumps({'kind':'answer','value':pending[1][0]})+'\n').encode())
                     pending=None
                 try: chunk=connection.recv(65536)
-                except socket.timeout: continue
+                except socket.timeout:
+                    if self.process.poll() is not None:
+                        raise RuntimeError('下载进程退出前未报告完成状态，请查看日志。')
+                    continue
+                except ConnectionResetError as exc:
+                    raise RuntimeError('下载进程连接意外断开，已保存的进度保留。') from exc
                 if not chunk:
                     self.process.wait(timeout=5)
                     if not received_done:
@@ -103,8 +108,13 @@ class TaskProcess:
                         if not self.cancel.is_set():
                             self.events.put(('prompt',(message['value'],event,answer)))
                     elif kind in ('log','done'):
-                        if kind=='done': received_done=True
+                        if kind=='done':
+                            received_done=True
+                            connection.sendall(b'{"kind":"finished"}\n')
                         self.events.put((kind,message['value']))
+                        if kind=='done':
+                            self.process.wait(timeout=5)
+                            return
         finally:
             if connection: connection.close()
             server.close()
@@ -117,6 +127,7 @@ def run_worker(mode,port,token,test=False):
     connection.settimeout(None)
     lock=threading.Lock()
     cancelled=threading.Event()
+    finished=threading.Event()
     answers=queue.Queue()
     def send(kind,value=None):
         with lock:
@@ -124,10 +135,16 @@ def run_worker(mode,port,token,test=False):
     connection.sendall((json.dumps({'token':token})+'\n').encode())
     def read():
         try:
-            for line in connection.makefile('r',encoding='utf-8'):
-                message=json.loads(line)
-                if message['kind']=='stop': cancelled.set()
-                elif message['kind']=='answer': answers.put(message['value'])
+            with connection.makefile('r',encoding='utf-8') as incoming:
+                for line in incoming:
+                    message=json.loads(line)
+                    if message['kind']=='stop': cancelled.set()
+                    elif message['kind']=='answer': answers.put(message['value'])
+                    elif message['kind']=='finished':
+                        finished.set()
+                        return
+        except OSError:
+            pass
         finally:
             cancelled.set()
     threading.Thread(target=read,daemon=True).start()
@@ -171,6 +188,9 @@ def run_worker(mode,port,token,test=False):
     finally:
         sys.settrace(None)
         send('done',result)
+        finished.wait(timeout=2)
+        try: connection.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
         connection.close()
 
 
