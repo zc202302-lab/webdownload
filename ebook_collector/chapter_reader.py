@@ -11,6 +11,8 @@ from PIL import Image
 from playwright.sync_api import Error as PlaywrightError
 from library_manager import file_hash, save_json
 from library_manager import validate_pdf
+from library_manager import StorageFull
+from chapter_dom import HELPERS
 
 
 def check_resolution(size, settings):
@@ -52,15 +54,24 @@ def modal_body(next_button):
 
 
 def body_snapshot(modal, title):
-    return modal.evaluate(r'''(e,title) => {
+    return modal.evaluate(r'''(e,title) => {''' + HELPERS + r'''
         const selector='.modal-body,.chapter-content,.article-content,#chapterContent,#articleContent';
         const found=e.matches(selector) ? e : e.querySelector(selector);
         const body=found || e;
-        const visible=x=>!!(x.getBoundingClientRect().width && x.getBoundingClientRect().height);
+        const visible=x=>shown(x) && !!(x.getBoundingClientRect().width && x.getBoundingClientRect().height);
         const restricted=[...e.querySelectorAll('.locked-content,.paywall')].some(visible);
         let pending=e.getAttribute('aria-busy')==='true' || [...e.querySelectorAll('[aria-busy="true"],.loading,.spinner,.load-error,.error-message,[role="alert"]')].some(visible);
-        const unsupported=!!body.querySelector('iframe,canvas,video,object,embed,svg');
+        const unsupported=[...body.querySelectorAll('iframe,canvas,video,object,embed,svg')].some(x=>shown(x) && !x.closest(excluded));
         const clone=body.cloneNode(true);
+        const originals=[body,...body.querySelectorAll('*')];
+        const copies=[clone,...clone.querySelectorAll('*')];
+        originals.forEach((x,i)=>{
+          if(i && (!shown(x) || x.matches(excluded))) copies[i].remove();
+          if(x.tagName==='IMG') {
+            if(!includedImage(x)) copies[i].remove();
+            else copies[i].setAttribute('src',imageIdentity(x));
+          }
+        });
         clone.querySelectorAll('script,style,iframe,source,button,nav,.modal-header,.modal-footer,.chapter-nav,.chapter-navigation,.close').forEach(x=>x.remove());
         clone.querySelectorAll('a,[role=button]').forEach(x=>{
             if(/上一章|下一章|关闭/.test(x.textContent)) x.remove();
@@ -96,16 +107,13 @@ def advance_scroll(modal):
 
 
 def image_sources(modal):
-    return modal.locator('img').evaluate_all(r'''async es => {
-      const body=es.filter(e=> {
-        const r=e.getBoundingClientRect();
-        return (r.width>40 && (r.height>40 || !e.naturalHeight)) || (r.width>0 && e.naturalWidth>40 && e.naturalHeight>40);
-      });
+    return modal.locator('img').evaluate_all(r'''async es => {''' + HELPERS + r'''
+      const body=es.filter(includedImage);
       return await Promise.all(body.map(async e=>{
         let ready=e.complete && e.naturalWidth>0 && e.naturalHeight>0;
         if(ready && e.decode) { try { await e.decode(); } catch { ready=false; } }
         return {
-        src:e.currentSrc || e.src,
+        src:imageIdentity(e),
         dom_src:e.src,
         sources:[e.getAttribute('data-original'),e.getAttribute('data-src'),e.getAttribute('data-large'),...((e.getAttribute('srcset') || '').split(',').map(s=>s.trim().split(/\s+/)[0]))].filter(Boolean).map(s=>new URL(s,e.baseURI).href),
         width:e.naturalWidth,height:e.naturalHeight,ready
@@ -127,6 +135,10 @@ def wait_chapter(page, expected, previous, settings):
     empty_since=None
     empty_signature=None
     empty_result=None
+    partial_result=None
+    partial_since=None
+    partial_signature=None
+    diagnostics={'reasons':['未识别正文弹窗']}
     title=re.sub(r'^\s*\d+\s+', '',expected)
     while time.monotonic()<deadline:
         try:
@@ -152,11 +164,31 @@ def wait_chapter(page, expected, previous, settings):
             signature=json.dumps([[(im['src'],im['width'],im['height']) for im in sources],snapshot['html'],scroll['height']])
             captured={url for im in sources for url in (im['src'],im.get('dom_src',im['src']))}
             all_body_images=all(url in captured for url in snapshot.get('image_urls',[]))
-            ready=(bool(sources) or snapshot['text_length']>0) and all_body_images and all(im['ready'] for im in sources) and title in text and signature != previous and scroll['bottom'] and not snapshot.get('pending') and not snapshot.get('unsupported')
+            title_matches=re.sub(r'\s+','',title) in re.sub(r'\s+','',text)
+            structural=(snapshot.get('body_identified',True) and title_matches and signature != previous
+                        and scroll['bottom'] and not snapshot.get('pending') and not snapshot.get('unsupported') and all_body_images)
+            ready=(bool(sources) or snapshot['text_length']>0) and all(im['ready'] for im in sources) and structural
             is_empty=empty_body(snapshot,sources) and title in text and scroll['bottom']
+            reasons=[]
+            for condition,reason in ((not snapshot.get('body_identified',True),'未识别正文区域'),
+                    (not title_matches,'正文标题不匹配'),(not scroll['bottom'],'正文未滚到底'),
+                    (snapshot.get('pending'),'正文仍有加载或错误提示'),(snapshot.get('unsupported'),'正文存在未支持的媒体'),
+                    (not all_body_images,'正文图片与采集列表不一致'),
+                    (any(not im['ready'] for im in sources),'图片未加载或解码失败')):
+                if condition: reasons.append(reason)
+            diagnostics={'reasons':reasons,'images':[{'position':i+1,'ready':im['ready'],
+                         'width':im['width'],'height':im['height']} for i,im in enumerate(sources)]}
+            if structural and sources and snapshot.get('body_identified',False):
+                if signature!=partial_signature:
+                    partial_signature,partial_since=signature,time.monotonic()
+                partial_result=(sources,signature,modal)
+            else:
+                partial_result,partial_since,partial_signature=None,None,None
         except (RuntimeError,PlaywrightError):
             ready=False
             is_empty=False
+            partial_result,partial_since,partial_signature=None,None,None
+            diagnostics={'reasons':['识别正文弹窗或读取页面失败']}
         if is_empty:
             if signature!=empty_signature:
                 empty_since=time.monotonic()
@@ -180,7 +212,13 @@ def wait_chapter(page, expected, previous, settings):
     # A last-moment DOM change, missing image or unresolved loader cannot pass.
     if empty_result and empty_since is not None and time.monotonic()-empty_since>=30:
         return empty_result
-    raise RuntimeError(f'正文图片在等待时间内未全部加载完成，未保存本章：{expected}')
+    if settings.get('_diagnostic_path'):
+        save_json(settings['_diagnostic_path'],dict(diagnostics,title=expected,wait_seconds=max(300,float(settings.get('chapter_wait_seconds',300)))))
+    if settings.get('_allow_missing_images') and partial_result and partial_since is not None and time.monotonic()-partial_since>=30:
+        print('正文已稳定，但存在未就绪图片；尝试下载实际原图，失败计入本杂志缺失数。')
+        return partial_result
+    detail='；'.join(diagnostics['reasons']) or '正文内容未稳定或仍为空'
+    raise RuntimeError(f'正文等待至少300秒后仍未通过检查：{detail}；未保存本章：{expected}')
 
 
 def request_image(context, url, referer):
@@ -305,6 +343,8 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
     progress = json.loads(progress_path.read_text(encoding='utf-8')) if progress_path.exists() else {'chapters': {}, 'entries': entries}
     if progress['entries'] != entries:
         raise RuntimeError('目录发生变化，暂停以便核查原进度。')
+    from missing_records import MissingRecords
+    missing=MissingRecords(library,task,progress,progress_path)
     all_paths = []
     chapter_pdfs=[]
     rendered_entries=[]
@@ -313,6 +353,9 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         library.check_space()
         chapter_pdf=work/f'chapter_{index+1:04d}.pdf'
         complete=progress.get('completed_entries',{}).get(str(index))
+        if complete and complete.get('missing_only') and complete.get('title')==expected:
+            print(f'目录 {index+1}/{len(entries)} 图片已记录缺失，跳过：{expected}')
+            continue
         if complete and complete.get('empty') and complete.get('title')==expected:
             blank_entries.append(expected)
             print(f'目录 {index+1}/{len(entries)} 已记录为空白，跳过：{expected}')
@@ -328,12 +371,16 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
         print(f'打开杂志目录 {index+1}/{len(entries)}：{expected}')
         page.get_by_text(expected,exact=True).first.click(timeout=10000)
         print(f'等待正文目录 {index+1}/{len(entries)} 完整加载……')
-        sources,signature,modal=wait_chapter(page,expected,None,settings)
+        wait_settings=dict(settings,_allow_missing_images=True,_diagnostic_path=work/f'chapter_{index+1:04d}_diagnostic.json')
+        sources,signature,modal=wait_chapter(page,expected,None,wait_settings)
         snapshot=body_snapshot(modal,re.sub(r'^\s*\d+\s+','',expected))
         if snapshot.get('restricted'):
             raise PermissionError(f'保存前发现正文权限锁定：{expected}')
         if snapshot.get('pending') or snapshot.get('unsupported'):
             raise RuntimeError(f'保存前正文仍有加载提示或未支持的媒体：{expected}')
+        captured={url for im in sources for url in (im['src'],im.get('dom_src',im['src']))}
+        if not all(url in captured for url in snapshot.get('image_urls',[])):
+            raise RuntimeError(f'正文在保存前发生变化，图片列表不一致：{expected}')
         if empty_body(snapshot,sources):
             close_chapter(modal)
             progress.setdefault('completed_entries',{})[str(index)]={'empty':True,'title':expected}
@@ -355,12 +402,30 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
                 size=tuple(old['size'])
             else:
                 part=path.with_suffix('.part')
-                size, source=download_best(context,item,page.url,part,library)
-                if not mixed:
-                    check_resolution(size,settings)
+                try:
+                    size, source=download_best(context,item,page.url,part,library)
+                    if not mixed:
+                        check_resolution(size,settings)
+                except (StorageFull,PermissionError):
+                    raise
+                except RuntimeError as exc:
+                    missing.add(index,expected,image_index,item,'正文原图失败：'+str(exc))
+                    # Remove only this failed DOM image from text/image export;
+                    # preserve captions and all other body content.
+                    aliases={item['src'],item.get('dom_src',item['src'])}
+                    removed=[False]
+                    def remove_failed(match):
+                        src=re.search(r'\bsrc\s*=\s*([\"\x27])(.*?)\1',match.group(0),re.I|re.S)
+                        if not removed[0] and src and html.unescape(src[2]) in aliases:
+                            removed[0]=True
+                            return ''
+                        return match.group(0)
+                    snapshot['html']=re.sub(r'<img\b[^>]*>',remove_failed,snapshot['html'],flags=re.I)
+                    continue
                 part.replace(path)
                 progress['chapters'][key]={'sha256':file_hash(path),'size':list(size),'source':source,'title':expected}
                 save_json(progress_path,progress)
+            missing.recovered(index,image_index)
             if not mixed:
                 check_resolution(size,settings)
             all_paths.append(path)
@@ -369,28 +434,36 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
             mapping[item.get('dom_src',item['src'])]=path
             print(f'正文目录 {index+1}/{len(entries)}，原图{size[0]}×{size[1]}')
         library.check_space(sum(p.stat().st_size for p in chapter_images)*3+64*1024*1024)
+        if not chapter_images and not mixed:
+            close_chapter(modal)
+            progress.setdefault('completed_entries',{})[str(index)]={'missing_only':True,'title':expected}
+            save_json(progress_path,progress)
+            continue
         if mixed:
             print_body(context,snapshot,mapping,chapter_pdf)
         else:
             build_pdf(chapter_images,chapter_pdf)
         pages=validate_pdf(chapter_pdf)
+        close_chapter(modal)
         progress.setdefault('completed_entries',{})[str(index)]={'sha256':file_hash(chapter_pdf),'pages':pages,'images':{p.name:file_hash(p) for p in chapter_images}}
         save_json(progress_path,progress)
         chapter_pdfs.append(chapter_pdf)
         rendered_entries.append(expected)
-        close_chapter(modal)
     if not chapter_pdfs:
         library.update(task,'已完成',pdf='',pages=0,bytes=0,mode='目录正文',
                        blank_entries=blank_entries,chapter_count=len(entries),
                        empty_record=progress_path.relative_to(library.root).as_posix(),
-                       empty_record_sha256=file_hash(progress_path),reason='全部目录均为空白，已跳过；未生成PDF')
+                       empty_record_sha256=file_hash(progress_path),reason='未生成PDF；缺失图片已记录' if progress['missing_images'] else '全部目录均为空白，已跳过；未生成PDF')
+        missing.sync()
         return
     library.check_space(sum(p.stat().st_size for p in chapter_pdfs)*2+64*1024*1024)
     page_count=merge_chapters(chapter_pdfs,output,rendered_entries)
     library.complete(task,output,page_count)
     library.update(task,'已完成',mode='目录正文',chapter_count=len(entries),blank_entries=blank_entries,
-                   reason=f'已跳过{len(blank_entries)}个空白条目：'+ '；'.join(blank_entries) if blank_entries else '',
+                   reason=('缺失'+str(len(progress['missing_images']))+'张图片，已按允许≤3张视为成功；详见缺失记录.txt。' if progress['missing_images'] else '')
+                         +(f'已跳过{len(blank_entries)}个空白条目：'+ '；'.join(blank_entries) if blank_entries else ''),
                    body_image_sizes=[x['size'] for x in progress['chapters'].values()])
+    missing.sync()
     if not settings['keep_page_images']:
         import shutil
         shutil.rmtree(work)

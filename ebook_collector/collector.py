@@ -426,6 +426,8 @@ def main():
     library.check_space()
     library.flush()
     print('浏览器即将打开。请登录，并选择想下载的杂志栏目（能看到年份标签）。')
+    from missing_records import write_missing_report
+    write_missing_report(library)
     with sync_playwright() as p:
         context = launch_browser(p)
         page = context.pages[0] if context.pages else context.new_page()
@@ -454,3 +456,4 @@ if __name__ == '__main__':
     except Exception as exc:
         print(f'\n未完成：{exc}\n已保存的图片和进度不会删除。')
     input('按回车退出。')
+
