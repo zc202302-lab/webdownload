@@ -72,6 +72,38 @@ def self_test():
     assert '图形任务日志测试' in window.log.get('1.0', 'end')
     window.thread.join(timeout=5)
     root.destroy()
+    # Real owned subprocess cancellation, including a blocked operation.
+    from task_process import TaskProcess
+    event_queue=queue.Queue()
+    cancellation=threading.Event()
+    def test_command(port,token):
+        base=[sys.executable] if getattr(sys,'frozen',False) else [sys.executable,str(app_root()/'desktop_app.py')]
+        return base+['--task-worker-test','block',str(port),token]
+    controller=TaskProcess('magazines',event_queue,cancellation,test_command)
+    thread=threading.Thread(target=controller.run)
+    thread.start()
+    try:
+        deadline=time.monotonic()+30
+        while time.monotonic()<deadline:
+            try: kind,value=event_queue.get(timeout=0.2)
+            except queue.Empty: continue
+            if kind=='log' and 'block started' in value: break
+        else: raise RuntimeError('Worker did not start')
+    finally:
+        cancellation.set()
+        thread.join(timeout=10)
+    assert not thread.is_alive() and controller.process.poll() is not None
+    # Validate the actual main-loop acknowledgement used by restart checking.
+    from auto_updater import wait_startup
+    with tempfile.TemporaryDirectory() as folder:
+        marker=Path(folder)/'startup.json'
+        base=[sys.executable] if getattr(sys,'frozen',False) else [sys.executable,str(app_root()/'desktop_app.py')]
+        process=subprocess.Popen(base+['--startup-test','--startup-result',str(marker)],**process_options())
+        try:
+            wait_startup(process,marker,app_root()/'WebDownload.exe',timeout=20)
+            assert process.wait(timeout=10)==0
+        finally:
+            if process.poll() is None: process.kill();process.wait(timeout=5)
     if os.name == 'nt' and getattr(sys, 'frozen', False):
         import ctypes
         assert not ctypes.windll.kernel32.GetConsoleWindow(), 'EXE unexpectedly has a console'
@@ -143,6 +175,7 @@ class App:
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=12)
         ttk.Button(row, text='打开资料库', command=self.open_output).pack(side='left')
+        ttk.Button(row, text='打开下载目录', command=self.open_download_root).pack(side='left',padx=6)
         ttk.Button(row, text='打开程序文件夹', command=lambda: os.startfile(app_root())).pack(side='left', padx=8)
         self.update_button = ttk.Button(row, text='检查更新', command=self.update)
         self.update_button.pack(side='right')
@@ -174,6 +207,15 @@ class App:
             os.startfile(output)
         except Exception as exc:
             messagebox.showerror('无法打开资料库', str(exc))
+
+    def open_download_root(self):
+        from library_manager import read_settings
+        try:
+            directory=read_settings(app_root())['output_path'].parent
+            directory.mkdir(parents=True,exist_ok=True)
+            os.startfile(directory)
+        except Exception as exc:
+            messagebox.showerror('无法打开下载目录',str(exc))
 
     def update(self):
         self.tasks = [task for task in self.tasks if task.poll() is None]
@@ -252,7 +294,10 @@ if __name__ == '__main__':
         sys.stdout = open(os.devnull, 'w', encoding='utf-8')
     if sys.stderr is None:
         sys.stderr = open(os.devnull, 'w', encoding='utf-8')
-    if '--update-parent-test' in sys.argv:
+    if len(sys.argv)==5 and sys.argv[1] in ('--task-worker','--task-worker-test'):
+        from task_process import run_worker
+        run_worker(sys.argv[2],sys.argv[3],sys.argv[4],test=sys.argv[1]=='--task-worker-test')
+    elif '--update-parent-test' in sys.argv:
         import time
         time.sleep(5)
     elif '--self-test' in sys.argv or '--self-test-update' in sys.argv:
@@ -283,5 +328,15 @@ if __name__ == '__main__':
     else:
         root = tk.Tk()
         App(root)
+        if '--startup-test' in sys.argv:
+            root.withdraw()
+            root.after(2000,root.destroy)
+        if '--startup-result' in sys.argv:
+            marker=Path(sys.argv[sys.argv.index('--startup-result')+1])
+            def startup_ready():
+                temporary=marker.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'ready':True,'version':VERSION,'root':str(app_root()),'pid':os.getpid()}),encoding='utf-8')
+                temporary.replace(marker)
+            root.after(100,startup_ready)
         root.mainloop()
 

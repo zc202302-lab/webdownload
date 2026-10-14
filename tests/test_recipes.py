@@ -54,7 +54,7 @@ with patch.object(r, 'body_snapshot', return_value=None), patch.object(r.time, '
     else: raise AssertionError('incomplete recipe accepted')
 
 with tempfile.TemporaryDirectory() as temp:
-    store = r.RecipeStore(Path(temp), 1)
+    store = r.RecipeStore(Path(temp)/'output', 1)
     def download(context, image, referer, path, storage):
         Image.new('RGB', (100, 200), 'white').save(path, format='JPEG')
         return (100, 200), image['src']

@@ -46,18 +46,50 @@ def visible_next(page):
 
 
 def modal_body(next_button):
-    modal = next_button.locator('xpath=ancestor::*[@role="dialog" or contains(concat(" ",normalize-space(@class)," ")," modal-content ") or .//*[self::img or self::p or self::table]][1]')
+    modal = next_button.locator('xpath=ancestor::*[@role="dialog" or contains(concat(" ",normalize-space(@class)," ")," modal-content ") or contains(concat(" ",normalize-space(@class)," ")," modal ")][1]')
     tag = modal.evaluate('(e)=>e.tagName')
     if tag in ('BODY', 'HTML'):
         raise RuntimeError('未能识别正文弹窗，已停止以避免保存广告或导航。')
     return modal
 
 
+MODAL_PROBE = r'''(e,title)=>{
+  if(e.tagName==='BODY' || e.tagName==='HTML') return null;
+  const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+  if(!r.width || !r.height || s.display==='none' || s.visibility==='hidden') return null;
+  const semantic=e.matches('.modal-content,[role="dialog"],.modal,.chapter-modal,.content-modal');
+  if(!semantic && s.position!=='fixed') return null;
+  const normalize=t=>t.replace(/\s+/g,'');
+  const headers=[...e.querySelectorAll('h1,h2,h3,h4,.modal-title,.chapter-title')]
+    .filter(x=>!x.closest('.modal-body,.chapter-content,.article-content,#chapterContent,#articleContent'));
+  const match=headers.some(x=>normalize(x.textContent)===normalize(title));
+  if(!match && !normalize(e.innerText || '').includes(normalize(title))) return null;
+  return {score:(match?100:0)+(e.matches('.modal-content')?20:semantic?10:0),
+          tag:e.tagName,classes:e.className};
+}'''
+
+
+def locate_chapter_modal(page,title):
+    if not hasattr(page,'locator'):
+        return modal_body(visible_next(page))
+    candidates=page.locator('.modal-content,[role="dialog"],.modal,.chapter-modal,.content-modal,[id*="Modal"],[id*="modal"],[class*="modal"]')
+    best=None
+    for index in range(candidates.count()):
+        candidate=candidates.nth(index)
+        if not candidate.is_visible(): continue
+        probe=candidate.evaluate(MODAL_PROBE,title)
+        if probe and (best is None or probe['score']>best[0]):
+            best=(probe['score'],candidate)
+    if best is None:
+        raise RuntimeError('未找到标题匹配的可见正文弹窗。')
+    return best[1]
+
+
 def body_snapshot(modal, title):
     return modal.evaluate(r'''(e,title) => {''' + HELPERS + r'''
         const selector='.modal-body,.chapter-content,.article-content,#chapterContent,#articleContent';
-        const found=e.matches(selector) ? e : e.querySelector(selector);
-        const body=found || e;
+        const resolved=resolveBody(e);
+        const body=resolved.body;
         const visible=x=>shown(x) && !!(x.getBoundingClientRect().width && x.getBoundingClientRect().height);
         const restricted=[...e.querySelectorAll('.locked-content,.paywall')].some(visible);
         let pending=e.getAttribute('aria-busy')==='true' || [...e.querySelectorAll('[aria-busy="true"],.loading,.spinner,.load-error,.error-message,[role="alert"]')].some(visible);
@@ -91,13 +123,18 @@ def body_snapshot(modal, title):
             x.setAttribute('src',new URL(x.getAttribute('src') || x.getAttribute('data-src') || '',e.ownerDocument.baseURI).href);
             x.removeAttribute('srcset'); x.removeAttribute('loading');
         });
-        return {html:clone.innerHTML,text_length:clone.textContent.trim().length,image_urls:[...clone.querySelectorAll('img')].map(im=>im.getAttribute('src')),body_identified:!!found,restricted,pending,unsupported};
+        return {html:clone.innerHTML,text_length:clone.textContent.trim().length,image_urls:[...clone.querySelectorAll('img')].map(im=>im.getAttribute('src')),body_identified:resolved.identified,body_method:resolved.method,modal_tag:e.tagName,modal_classes:e.className,restricted,pending,unsupported};
     }''', title)
 
 
 def advance_scroll(modal):
     return modal.evaluate(r'''e=>{
-        const targets=[e,...e.querySelectorAll('*')].filter(x=>{
+        const ancestors=[];
+        for(let p=getComputedStyle(e).position==='fixed'?null:e.parentElement;p && p.tagName!=='BODY' && p.tagName!=='HTML';p=p.parentElement) {
+          ancestors.push(p);
+          if(p.matches?.('.modal,[role="dialog"],.chapter-modal,.content-modal') || getComputedStyle(p).position==='fixed') break;
+        }
+        const targets=[...ancestors,e,...e.querySelectorAll('*')].filter(x=>{
             const s=getComputedStyle(x);
             return x.clientHeight>50 && x.scrollHeight>x.clientHeight+10 && /auto|scroll/.test(s.overflowY);
         });
@@ -111,7 +148,12 @@ def image_sources(modal):
       const body=es.filter(includedImage);
       return await Promise.all(body.map(async e=>{
         let ready=e.complete && e.naturalWidth>0 && e.naturalHeight>0;
-        if(ready && e.decode) { try { await e.decode(); } catch { ready=false; } }
+        if(ready && e.decode) {
+          let timer;
+          try { await Promise.race([e.decode(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('decode timeout')),2000);})]); }
+          catch { ready=false; }
+          finally { clearTimeout(timer); }
+        }
         return {
         src:imageIdentity(e),
         dom_src:e.src,
@@ -140,21 +182,13 @@ def wait_chapter(page, expected, previous, settings):
     partial_signature=None
     diagnostics={'reasons':['未识别正文弹窗']}
     title=re.sub(r'^\s*\d+\s+', '',expected)
+    started=time.monotonic()
+    last_notice=started
     while time.monotonic()<deadline:
         try:
             # On the final chapter the Next control may disappear. Identify
             # its content modal through the chapter heading instead.
-            headings=page.get_by_text(title,exact=True)
-            modal=None
-            for index in range(headings.count()-1,-1,-1):
-                heading=headings.nth(index)
-                if heading.is_visible():
-                    candidate=heading.locator('xpath=ancestor::*[@role="dialog" or contains(concat(" ",normalize-space(@class)," ")," modal-content ") or .//img or .//p or .//table][1]')
-                    if candidate.evaluate('(e)=>e.tagName') not in ('BODY','HTML'):
-                        modal=candidate
-                        break
-            if modal is None:
-                modal=modal_body(visible_next(page))
+            modal=locate_chapter_modal(page,title)
             text=modal.inner_text()
             scroll=advance_scroll(modal)
             snapshot=body_snapshot(modal,title)
@@ -176,7 +210,9 @@ def wait_chapter(page, expected, previous, settings):
                     (not all_body_images,'正文图片与采集列表不一致'),
                     (any(not im['ready'] for im in sources),'图片未加载或解码失败')):
                 if condition: reasons.append(reason)
-            diagnostics={'reasons':reasons,'images':[{'position':i+1,'ready':im['ready'],
+            diagnostics={'reasons':reasons,'body_method':snapshot.get('body_method','未知'),
+                         'modal_tag':snapshot.get('modal_tag','未知'),'modal_classes':snapshot.get('modal_classes',''),
+                         'scroll_bottom':scroll['bottom'],'images':[{'position':i+1,'ready':im['ready'],
                          'width':im['width'],'height':im['height']} for i,im in enumerate(sources)]}
             if structural and sources and snapshot.get('body_identified',False):
                 if signature!=partial_signature:
@@ -207,6 +243,9 @@ def wait_chapter(page, expected, previous, settings):
         else:
             stable_since=None
             last_signature=None
+        if time.monotonic()-last_notice>=10:
+            print(f'正文已等待{int(time.monotonic()-started)}秒：'+('；'.join(diagnostics['reasons']) or '等待内容稳定'))
+            last_notice=time.monotonic()
         page.wait_for_timeout(250)
     # Empty content waits the full configured interval (at least 60 seconds).
     # A last-moment DOM change, missing image or unresolved loader cannot pass.

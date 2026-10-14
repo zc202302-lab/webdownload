@@ -74,6 +74,14 @@ class TaskWindow:
         return self.trace
 
     def work(self, runner):
+        if runner is None:
+            from task_process import TaskProcess
+            try:
+                TaskProcess(self.mode,self.events,self.cancel).run()
+            except Exception as exc:
+                self.events.put(('log',f'\n下载进程异常：{exc}\n'))
+                self.events.put(('done','下载已停止，已保存的进度保留。'))
+            return
         original_input = builtins.input
         original_out, original_err = sys.stdout, sys.stderr
         builtins.input = self.input
@@ -119,7 +127,7 @@ class TaskWindow:
             self.cancel.set()
             self.stop_button.state(['disabled'])
             self.submit_button.state(['disabled'])
-            self.status.set('正在停止并保存进度；网络请求可能需要等待返回。')
+            self.status.set('正在停止下载；保留已保存进度，长时间等待将结束下载进程。')
 
     def close(self):
         if self.finished:
@@ -143,6 +151,8 @@ class TaskWindow:
                 self.log.see('end')
                 self.log.configure(state='disabled')
             elif kind == 'prompt':
+                if self.cancel.is_set():
+                    continue
                 self.pending = value
                 self.prompt.set(value[0])
                 self.status.set('等待你的操作')

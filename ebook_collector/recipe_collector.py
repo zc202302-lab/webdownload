@@ -116,7 +116,8 @@ def wait_body(page, settings):
 
 class RecipeStore:
     def __init__(self, root, reserve_gb):
-        self.root = Path(root) / '爆款菜谱'
+        from download_paths import category_root
+        self.root = category_root(root,'爆款菜谱')
         self.storage = Library(self.root, reserve_gb)
         self.path = self.root / '菜谱记录.json'
         self.db = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'recipes': {}}

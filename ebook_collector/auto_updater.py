@@ -34,7 +34,8 @@ def prepare_update(candidate, expected, target=None, parent_pid=None, smoke_test
     # Run the actual candidate before asking the original GUI to exit.
     subprocess.run([str(candidate), '--self-test'], check=True, timeout=120, **process_options())
     helper = candidate.parent / 'updater.exe'
-    shutil.copy2(target, helper)
+    # The verified candidate carries the newest updater and launch handshake.
+    shutil.copy2(candidate, helper)
     plan = candidate.parent / 'plan.json'
     data = {'target': str(target), 'candidate': str(candidate), 'sha256': expected,
             'parent_pid': os.getpid() if parent_pid is None else parent_pid, 'smoke_test': smoke_test}
@@ -89,6 +90,23 @@ def install_candidate(target, candidate, backup, expected):
         raise
 
 
+def wait_startup(process,marker,target,timeout=45):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        if marker.exists():
+            try:
+                data=json.loads(marker.read_text(encoding='utf-8'))
+                if data.get('ready') and Path(data['root']).resolve()==target.parent.resolve():
+                    if process.poll() is None:
+                        return
+            except (ValueError,KeyError,OSError):
+                pass
+        if process.poll() is not None:
+            raise RuntimeError(f'新版启动后退出，退出码：{process.returncode}')
+        time.sleep(0.2)
+    raise RuntimeError('新版未在45秒内确认主窗口启动。')
+
+
 def apply_update(plan_path):
     plan_path = Path(plan_path).resolve()
     plan = json.loads(plan_path.read_text(encoding='utf-8'))
@@ -103,16 +121,33 @@ def apply_update(plan_path):
     elif not plan.get('smoke_test'):
         raise ValueError('旧程序进程信息无效')
     install_candidate(target, candidate, backup, plan['sha256'])
+    restarted=None
     try:
-        args = ['--updated']
+        marker=plan_path.parent/'startup.json'
+        marker.unlink(missing_ok=True)
+        args = ['--updated','--startup-result',str(marker)]
         if plan.get('smoke_test'):
             args = ['--self-test', '--self-test-result', str(plan_path.parent / 'restarted.json')]
         restarted = subprocess.Popen([str(target), *args], cwd=target.parent, **process_options())
         if plan.get('smoke_test'):
             if restarted.wait(timeout=120) != 0:
                 raise RuntimeError('新版启动测试失败')
-    except BaseException:
+        else:
+            wait_startup(restarted,marker,target)
+    except BaseException as exc:
+        try:
+            (plan_path.parent/'error.txt').write_text(str(exc),encoding='utf-8')
+        except OSError:
+            pass
+        if restarted and restarted.poll() is None:
+            from task_process import kill_tree
+            # This updater child is a dedicated owned process on Windows.
+            if os.name=='nt': kill_tree(restarted)
+            else: restarted.kill();restarted.wait(timeout=5)
         replace_retry(backup, target)
+        if not plan.get('smoke_test'):
+            subprocess.Popen([str(target)],cwd=target.parent,**process_options())
         raise
     # Leave previous.exe available for recovery. It never contains user data.
     return target
+

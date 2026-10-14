@@ -44,9 +44,9 @@ class ListPage:
         self.clock.wait(ms)
 
     def snapshot(self):
-        ready = self.clock.now >= 40 and self.mode == 'complete'
+        ready = self.clock.now >= 40 and self.mode in ('complete','jitter')
         return {'items': [ITEM, ITEM, SECOND] if ready else [ITEM],
-                'height': 2000 if ready else 1000, 'bottom': self.scrolls > 0,
+                'height': (2000+int(self.clock.now*2)%7 if self.mode=='jitter' else 2000) if ready else 1000, 'bottom': self.scrolls > 0,
                 'more_present': self.mode != 'missing', 'more': not ready,
                 'loading': not ready and self.mode == 'complete',
                 'error': self.mode == 'error'}
@@ -125,7 +125,7 @@ class Frame:
 
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
-    store = books.BookStore(root, 1)
+    store = books.BookStore(root/'output', 1)
     assert store.root == root/'电子书'
     clock = Clock()
     page = ListPage(clock, 'complete')
@@ -133,6 +133,10 @@ with tempfile.TemporaryDirectory() as folder:
         items = books.discover_books(page, store, SETTINGS)
     assert len(items) == 2 and clock.now >= 70 and store.db['scan_complete']
     assert page.scrolls > 1
+    clock=Clock();page=ListPage(clock,'jitter')
+    with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'list_snapshot',lambda p:p.snapshot()):
+        assert len(books.discover_books(page,store,SETTINGS))==2
+    assert clock.now<100 and store.db['scan_complete']
     for mode, message in [('error', '加载失败'), ('stalled', '至少60秒'), ('missing', '至少60秒')]:
         clock = Clock()
         page = ListPage(clock, mode)

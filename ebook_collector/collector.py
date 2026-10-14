@@ -72,10 +72,12 @@ def build_pdf(paths, output, outline=None):
     temporary.replace(output)
 
 
-def find_reader(context, timeout=90, pages=None):
+def find_reader(context, timeout=60, pages=None):
     deadline = time.monotonic() + timeout
+    baseline=set(context.pages)
     while time.monotonic() < deadline:
-        for page in list(pages if pages is not None else context.pages):
+        candidates=list(pages) + [p for p in context.pages if p not in baseline and p not in pages] if pages is not None else list(context.pages)
+        for page in candidates:
             if page.is_closed():
                 continue
             try:
@@ -86,6 +88,7 @@ def find_reader(context, timeout=90, pages=None):
                     try:
                         if frame.is_detached():
                             continue
+                        try_mobile_link(frame)
                         field = frame.locator('#currentPageIndexTextField')
                         if field.count() and field.is_visible():
                             value = field.input_value(timeout=2000)
@@ -101,27 +104,57 @@ def find_reader(context, timeout=90, pages=None):
     raise RuntimeError('未找到已加载的移动版阅读器。请保持书页打开，确认能看到1/152样式的页码，然后重试。')
 
 
+def try_mobile_link(frame):
+    field=frame.locator('#currentPageIndexTextField')
+    if field.count() and field.is_visible():
+        return False
+    links=frame.locator('a').filter(has_text=re.compile(r'^\s*here\s*$',re.I))
+    if not links.count():
+        return False
+    body=frame.locator('body').inner_text(timeout=1500)
+    if not re.search(r'flash|mobile|移动版|html5',body,re.I):
+        return False
+    for index in range(links.count()):
+        link=links.nth(index)
+        if link.is_visible():
+            print('检测到旧版阅读提示，点击网站提供的 here 移动版入口……')
+            link.click(timeout=5000)
+            return True
+    return False
+
+
+def recover_reader(frame,settings,expected=None):
+    if not hasattr(frame,'page'):
+        return frame
+    try:
+        if not frame.is_detached():
+            field=frame.locator('#currentPageIndexTextField')
+            if field.count() and field.is_visible():
+                return frame
+    except PlaywrightError:
+        pass
+    page=frame.page
+    replacement,_,_=find_reader(page.context,timeout=max(60,float(settings.get('chapter_wait_seconds',60))),pages=[page])
+    if expected is not None:
+        field=replacement.locator('#currentPageIndexTextField')
+        field.fill(str(expected));field.press('Enter')
+    return replacement
+
+
 def activate_mobile_reader(context, pages=None):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        for page in list(pages if pages is not None else context.pages):
-            for frame in list(page.frames):
-                try:
-                    if frame.is_detached():
-                        continue
-                    body = frame.locator('body').inner_text(timeout=1500)
-                    if 'Sorry' in body and 'flash player' in body.lower():
-                        mobile = frame.locator('a').filter(has_text=re.compile(r'^\s*here\s*$', re.I))
-                        if mobile.count():
-                            print('检测到旧版Flash提示，正在打开网站提供的移动版阅读器……')
-                            mobile.first.click(timeout=5000)
-                            page.wait_for_timeout(500)
-                            return
-                    if frame.locator('#currentPageIndexTextField').count():
-                        return
-                except PlaywrightError:
-                    continue
-        time.sleep(0.25)
+    # Optional quick check; find_reader owns the common 60-second deadline
+    # and detects a delayed here prompt without another preliminary wait.
+    for page in list(pages if pages is not None else context.pages):
+        if page.is_closed():
+            continue
+        for frame in list(page.frames):
+            try:
+                if not frame.is_detached() and try_mobile_link(frame):
+                    page.wait_for_timeout(300)
+                    return True
+            except PlaywrightError:
+                continue
+    return False
 
 
 def close_reader(page):
@@ -344,6 +377,8 @@ def collect(context, frame, total, task, library, settings):
     field = frame.locator('#currentPageIndexTextField')
     for number in range(1, total + 1):
         library.register(task)['active_operation']={'stage':'整本阅读器逐页采集','image_position':number}
+        frame=recover_reader(frame,settings,number)
+        field=frame.locator('#currentPageIndexTextField')
         library.check_space()
         path = folder / f'{number:04d}.jpg'
         existing = manifest['pages'].get(str(number))

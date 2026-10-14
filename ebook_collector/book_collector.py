@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from playwright.sync_api import sync_playwright
 from chapter_reader import download_best
-from collector import ROOT, build_pdf, find_reader, launch_browser, page_number, verified
+from collector import ROOT, build_pdf, find_reader, launch_browser, page_number, verified, recover_reader
 from library_manager import Library, file_hash, read_settings, safe_name, save_json, validate_pdf
 
 LIST_URL = 'https://www.easteat.com/book_list.php?category=books'
@@ -58,19 +58,20 @@ def discover_books(page, store, settings):
             if not item['title']:
                 raise RuntimeError('电子书名称为空，已停止。')
             found[identifier] = item
-        signature = (tuple(found), snapshot['height'])
+        signature = tuple(found)
         if signature != previous:
             previous, changed, end_since = signature, time.monotonic(), None
             store.db['discovered'] = list(found.values())
             store.flush()
             print(f'已发现 {len(found)} 本电子书，继续向下滚动……')
         if (found and snapshot['more_present'] and not snapshot['more']
-                and not snapshot['loading'] and snapshot['bottom']):
+                and not snapshot['loading']):
             if end_since is None:
                 end_since = time.monotonic()
             elif time.monotonic() - end_since >= 30:
                 store.db['scan_complete'] = True
                 store.flush()
+                print(f'列表扫描完成：共{len(found)}本电子书，开始逐本下载。')
                 return list(found.values())
         else:
             end_since = None
@@ -86,7 +87,8 @@ def discover_books(page, store, settings):
 
 class BookStore:
     def __init__(self, root, reserve_gb):
-        self.root = Path(root) / '电子书'
+        from download_paths import category_root
+        self.root = category_root(root,'电子书')
         self.storage = Library(self.root, reserve_gb)
         self.path = self.root / '电子书记录.json'
         self.db = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'books': {}}
@@ -206,6 +208,7 @@ def collect_book(context, frame, total, item, store, settings):
     expected = 1
     while expected <= total:
         store.storage.check_space()
+        frame=recover_reader(frame,settings,expected)
         pages, selected = wait_pages(frame, expected, total, settings, work)
         if pages[0] > expected:
             raise RuntimeError('翻页跳过了尚未保存的页面，已停止。')
@@ -275,6 +278,8 @@ def batch_books(context, page, items, store, settings):
             print(f'[{position}/{len(items)}] 下载：{item["title"]}，共{total}页')
             output, work = collect_book(context, frame, total, item, store, settings)
             close_book_reader(page)
+            if hasattr(frame,'page') and frame.page is not page and not frame.page.is_closed():
+                frame.page.close()
             store.update(item, '已完成', pdf=output.relative_to(store.root).as_posix(),
                          sha256=file_hash(output), pages=total, bytes=output.stat().st_size, reason='')
             if not settings.get('keep_page_images'):
