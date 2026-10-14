@@ -398,7 +398,8 @@ def collect_chapters(context, page, task, library, settings, build_pdf):
             path = work / f'chapter_{index+1:04d}_{image_index+1:03d}.jpg'
             key = f'{index}:{image_index}'
             old = progress['chapters'].get(key)
-            if old and path.exists() and file_hash(path)==old['sha256']:
+            candidates=set(item.get('sources',[])+[item['src'],item.get('dom_src',item['src'])])
+            if old and old.get('source') in candidates and path.exists() and file_hash(path)==old['sha256']:
                 size=tuple(old['size'])
             else:
                 part=path.with_suffix('.part')

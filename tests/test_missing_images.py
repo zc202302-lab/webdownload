@@ -149,4 +149,17 @@ with tempfile.TemporaryDirectory() as folder:
             else: raise AssertionError('non-image failure tolerated')
         assert not lib.db['books'][strict['id']]['missing_images']
 
+    cachetask=dict(task,id='old-cache',title='旧缓存来源核对')
+    _,cachework=lib.paths(cachetask)
+    cachework.mkdir(parents=True)
+    cached=cachework/'chapter_0001_001.jpg'
+    Image.new('RGB',(80,100),'red').save(cached)
+    from library_manager import file_hash,save_json
+    save_json(cachework/'chapters.json',{'entries':['Chapter'],'chapters':{'0:0':{
+        'source':'https://example.com/old-other-image.jpg','sha256':file_hash(cached),'size':[80,100]}}})
+    with patch.object(cr,'catalog_entries',return_value=['Chapter']),patch.object(cr,'wait_chapter',return_value=([images[3]],'signature',Modal())),patch.object(cr,'body_snapshot',return_value={'text_length':0,'html':'<img>'}),patch.object(cr,'download_best',side_effect=download) as fresh,patch.object(cr,'close_chapter'):
+        cr.collect_chapters(None,Page(),cachetask,lib,settings,collector.build_pdf)
+    assert fresh.call_count==1
+    assert Image.open(cached).size==(100,150)
+
 print('PASS: 300-second partial-image wait, diagnostics, whole-magazine 3/4 threshold, cross-chapter count, persistent dedup/recovery, missing-only records, mixed text retention, permission and storage remain strict')
