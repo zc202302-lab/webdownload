@@ -38,17 +38,17 @@ def run_wait(snapshot, sources, should_pass):
             assert should_pass
             return result
 
-assert run_wait(blank, [], True)[0] == [] and clock[0] >= 300
+assert run_wait(blank, [], True)[0] == [] and clock[0] >= 60
 for change in ({'pending': True}, {'restricted': True}, {'unsupported': True}, {'body_identified': False}, {'image_urls': ['missing.jpg']}):
     run_wait(dict(blank, **change), [], False)
 run_wait(blank, [{'src': 'a', 'width': 0, 'height': 0, 'ready': False}], False)
 # Short real text is content, not a blank or a lost caption.
 run_wait(dict(blank, text_length=3, html='<p>三字文</p>'), [], True)
-assert clock[0] < 300
-# A chapter blank for 299 seconds must still wait for a late image, not skip it.
+assert clock[0] < 60
+# A chapter blank for 59 seconds must still wait for a late image, not skip it.
 clock[0] = 0
 def lazy_images(modal):
-    return [] if clock[0] < 299 else [{'src': 'late', 'width': 0, 'height': 0, 'ready': False}]
+    return [] if clock[0] < 59 else [{'src': 'late', 'width': 0, 'height': 0, 'ready': False}]
 with patch.object(cr.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(cr, 'visible_next'), patch.object(cr, 'modal_body', return_value=Modal()), patch.object(cr, 'body_snapshot', return_value=blank), patch.object(cr, 'image_sources', side_effect=lazy_images), patch.object(cr, 'advance_scroll', return_value={'bottom': True, 'height': '1000'}):
     try: cr.wait_chapter(Page(), 'Chapter', None, {})
     except RuntimeError: pass
@@ -94,4 +94,5 @@ with tempfile.TemporaryDirectory() as folder:
         except RuntimeError: pass
         else: raise AssertionError('close failure ignored')
         assert not lib.done(failed_task)
-print('PASS: blank-only skip, 300-second confirmation, blocked/pending safety, late images, short text, bookmarks, resume and all-empty books')
+print('PASS: blank-only skip, 60-second confirmation, blocked/pending safety, late images, short text, bookmarks, resume and all-empty books')
+

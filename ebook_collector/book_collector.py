@@ -41,7 +41,7 @@ def list_snapshot(page):
 
 
 def discover_books(page, store, settings):
-    timeout = max(300, float(settings.get('chapter_wait_seconds', 300)))
+    timeout = max(60, float(settings.get('chapter_wait_seconds', 60)))
     changed = time.monotonic()
     end_since = None
     previous = None
@@ -75,7 +75,7 @@ def discover_books(page, store, settings):
         else:
             end_since = None
         if time.monotonic() - changed >= timeout:
-            raise RuntimeError('列表至少300秒未增长，尚未确认全部加载，已停止并保留扫描记录。')
+            raise RuntimeError('列表至少60秒未增长，尚未确认全部加载，已停止并保留扫描记录。')
         # Move incrementally, including a small up/down motion at the bottom so
         # the site's scroll listener fires even when the last request was slow.
         page.evaluate('''() => {const e=document.scrollingElement;
@@ -146,7 +146,7 @@ def reader_images(frame):
 
 
 def wait_pages(frame, expected, total, settings, work):
-    deadline = time.monotonic() + max(300, float(settings.get('chapter_wait_seconds', 300)))
+    deadline = time.monotonic() + max(60, float(settings.get('chapter_wait_seconds', 60)))
     previous, stable = None, None
     snapshot = {}
     while time.monotonic() < deadline:
@@ -168,7 +168,7 @@ def wait_pages(frame, expected, total, settings, work):
             previous, stable = None, None
         frame.wait_for_timeout(250)
     save_json(work / 'diagnostic.json', snapshot)
-    raise RuntimeError(f'第{expected}页或图片未完整加载，等待至少300秒后终止。')
+    raise RuntimeError(f'第{expected}页或图片未完整加载，等待至少60秒后终止。')
 
 
 def next_arrow(frame):
@@ -269,7 +269,7 @@ def batch_books(context, page, items, store, settings):
             button = page.locator('.reader-btn[data-url]').filter(has_text='立即阅读')
             button.wait_for(state='visible', timeout=10000)
             button.click(timeout=10000)
-            frame, value, _ = find_reader(context, timeout=max(300, float(settings['chapter_wait_seconds'])), pages=[page])
+            frame, value, _ = find_reader(context, timeout=max(60, float(settings['chapter_wait_seconds'])), pages=[page])
             match = re.search(r'/\s*(\d+)', value)
             total = int(match[1])
             print(f'[{position}/{len(items)}] 下载：{item["title"]}，共{total}页')

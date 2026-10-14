@@ -9,7 +9,7 @@ from urllib.parse import quote, urlparse
 
 from pypdf import PdfReader
 
-DEFAULT_SETTINGS = {'output_dir': 'output', 'reserve_gb': 20, 'years': 'all', 'start_year': None, 'keep_page_images': False, 'reading_mode': 'chapters', 'chapter_min_short_edge': 1000, 'chapter_min_long_edge': 1400, 'chapter_wait_seconds': 300}
+DEFAULT_SETTINGS = {'output_dir': 'output', 'reserve_gb': 20, 'years': 'all', 'start_year': None, 'keep_page_images': False, 'reading_mode': 'chapters', 'chapter_min_short_edge': 1000, 'chapter_min_long_edge': 1400, 'chapter_wait_seconds': 60}
 
 
 class StorageFull(RuntimeError):
@@ -59,7 +59,12 @@ def read_settings(root):
     path = Path(root) / 'settings.json'
     if not path.exists():
         save_json(path, DEFAULT_SETTINGS)
-    settings = dict(DEFAULT_SETTINGS, **json.loads(path.read_text(encoding='utf-8')))
+    configured=json.loads(path.read_text(encoding='utf-8'))
+    # User-requested migration of the former 300-second body wait only.
+    if configured.get('chapter_wait_seconds') in (180,300):
+        configured['chapter_wait_seconds']=60
+        save_json(path,configured)
+    settings = dict(DEFAULT_SETTINGS, **configured)
     if settings['reading_mode'] not in ('auto','chapters'):
         raise ValueError('reading_mode 应为 auto 或 chapters')
     if float(settings['chapter_wait_seconds']) < 10:
@@ -179,3 +184,4 @@ class Library:
         tmp = target.with_suffix('.tmp')
         tmp.write_text(content, encoding='utf-8')
         tmp.replace(target)
+

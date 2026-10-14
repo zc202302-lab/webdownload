@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory() as folder:
                 assert blocked
             else:
                 assert not blocked and result[0]==[pending]
-        assert clock[0]>=300 and diagnostic.exists()
+        assert clock[0]>=60 and diagnostic.exists()
         detail=json.loads(diagnostic.read_text())
         assert '图片未加载或解码失败' in detail['reasons']
         if blocked: assert '正文仍有加载或错误提示' in detail['reasons']
@@ -162,4 +162,4 @@ with tempfile.TemporaryDirectory() as folder:
     assert fresh.call_count==1
     assert Image.open(cached).size==(100,150)
 
-print('PASS: 300-second partial-image wait, diagnostics, whole-magazine 3/4 threshold, cross-chapter count, persistent dedup/recovery, missing-only records, mixed text retention, permission and storage remain strict')
+print('PASS: 60-second partial-image wait, diagnostics, whole-magazine 3/4 threshold, cross-chapter count, persistent dedup/recovery, missing-only records, mixed text retention, permission and storage remain strict')

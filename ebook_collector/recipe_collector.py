@@ -93,7 +93,7 @@ def body_snapshot(page):
 
 
 def wait_body(page, settings):
-    deadline = time.monotonic() + max(300, float(settings.get('chapter_wait_seconds', 300)))
+    deadline = time.monotonic() + max(60, float(settings.get('chapter_wait_seconds', 60)))
     previous = None
     stable = None
     while time.monotonic() < deadline:
@@ -111,7 +111,7 @@ def wait_body(page, settings):
         else:
             previous, stable = None, None
         page.wait_for_timeout(250)
-    raise RuntimeError('菜谱正文或图片未完整加载，等待至少300秒后终止。')
+    raise RuntimeError('菜谱正文或图片未完整加载，等待至少60秒后终止。')
 
 
 class RecipeStore:
@@ -277,3 +277,4 @@ if __name__ == '__main__':
     except Exception as exc:
         print(f'未完成：{exc}')
     input('按回车退出。')
+

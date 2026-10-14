@@ -133,7 +133,7 @@ with tempfile.TemporaryDirectory() as folder:
         items = books.discover_books(page, store, SETTINGS)
     assert len(items) == 2 and clock.now >= 70 and store.db['scan_complete']
     assert page.scrolls > 1
-    for mode, message in [('error', '加载失败'), ('stalled', '至少300秒'), ('missing', '至少300秒')]:
+    for mode, message in [('error', '加载失败'), ('stalled', '至少60秒'), ('missing', '至少60秒')]:
         clock = Clock()
         page = ListPage(clock, mode)
         with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'list_snapshot', lambda p: p.snapshot()):
@@ -172,8 +172,8 @@ with tempfile.TemporaryDirectory() as folder:
     clock = Clock()
     frame = Frame(clock, missing=True)
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()):
-        expect_failure(lambda: books.wait_pages(frame, 1, 3, SETTINGS, work), '至少300秒')
-    assert clock.now >= 300 and (work/'diagnostic.json').exists()
+        expect_failure(lambda: books.wait_pages(frame, 1, 3, SETTINGS, work), '至少60秒')
+    assert clock.now >= 60 and (work/'diagnostic.json').exists()
 
     class NoArrow:
         def locator(self, selector):
@@ -186,8 +186,8 @@ with tempfile.TemporaryDirectory() as folder:
     frame = Frame(clock)
     frame.current = 3
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()):
-        expect_failure(lambda: books.wait_pages(frame, 2, 3, SETTINGS, work), '至少300秒')
-    assert clock.now >= 300
+        expect_failure(lambda: books.wait_pages(frame, 2, 3, SETTINGS, work), '至少60秒')
+    assert clock.now >= 60
 
     class Button:
         def filter(self, **kwargs):
@@ -218,4 +218,4 @@ with tempfile.TemporaryDirectory() as folder:
     pdf.write_bytes(b'corrupt')
     assert not store.done(ITEM)
 
-print('PASS: slow scroll discovery, deduplication, explicit end, errors, 300-second waits, single/double-page arrows, blank originals, PDF, checksummed resume, close-before-completion and stop-on-failure')
+print('PASS: slow scroll discovery, deduplication, explicit end, errors, 60-second waits, single/double-page arrows, blank originals, PDF, checksummed resume, close-before-completion and stop-on-failure')

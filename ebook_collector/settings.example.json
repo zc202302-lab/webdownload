@@ -5,7 +5,8 @@
   "keep_page_images": false,
   "start_year": null,
   "reading_mode": "chapters",
-  "chapter_wait_seconds": 300,
+  "chapter_wait_seconds": 60,
   "chapter_min_short_edge": 1000,
   "chapter_min_long_edge": 1400
 }
+

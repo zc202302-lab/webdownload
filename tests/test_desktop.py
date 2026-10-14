@@ -30,3 +30,29 @@ for code in (404, 403, 429):
         except RuntimeError as exc: assert str(exc)
         else: raise AssertionError('update error ignored')
 print('PASS: portable data paths, numeric version comparisons, release validation and network error handling')
+
+# Migrating the former body-wait default must not reset user settings.
+import json
+import tempfile
+from library_manager import read_settings
+with tempfile.TemporaryDirectory() as folder:
+    root=Path(folder)
+    settings=read_settings(root)
+    assert settings['chapter_wait_seconds']==60
+    path=root/'settings.json'
+    original=json.loads(path.read_text())
+    original.update(chapter_wait_seconds=300,output_dir='my-books',start_year=2009,keep_page_images=True,custom_note='preserve')
+    path.write_text(json.dumps(original))
+    migrated=read_settings(root)
+    expected=dict(original,chapter_wait_seconds=60)
+    assert json.loads(path.read_text())==expected
+    assert migrated['output_path']==root/'my-books'
+    expected['chapter_wait_seconds']=180
+    path.write_text(json.dumps(expected))
+    assert read_settings(root)['chapter_wait_seconds']==60
+    expected['chapter_wait_seconds']=120
+    path.write_text(json.dumps(expected))
+    assert read_settings(root)['chapter_wait_seconds']==120
+    assert json.loads(path.read_text())==expected
+print('PASS: 60-second default, targeted 300-to-60 migration, data-path/settings and custom-wait preservation')
+

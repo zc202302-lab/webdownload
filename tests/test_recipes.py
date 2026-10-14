@@ -50,7 +50,7 @@ with patch.object(r, 'body_snapshot', side_effect=slow_body), patch.object(r.tim
 clock[0] = 0
 with patch.object(r, 'body_snapshot', return_value=None), patch.object(r.time, 'monotonic', side_effect=lambda: clock[0]):
     try: r.wait_body(Page(), {'chapter_wait_seconds': 10})
-    except RuntimeError: assert clock[0] >= 300
+    except RuntimeError: assert clock[0] >= 60
     else: raise AssertionError('incomplete recipe accepted')
 
 with tempfile.TemporaryDirectory() as temp:
@@ -97,3 +97,4 @@ with tempfile.TemporaryDirectory() as temp:
         else: raise AssertionError('pagination loop accepted')
     assert not store.db['scan_complete']
 print('PASS: recipe locks, lazy images, minimum wait, export, cached images, checksums, stop-on-failure and pagination loop')
+

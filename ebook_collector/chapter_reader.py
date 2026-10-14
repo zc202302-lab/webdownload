@@ -129,7 +129,7 @@ def empty_body(snapshot, sources):
 
 
 def wait_chapter(page, expected, previous, settings):
-    deadline=time.monotonic()+max(300.0,float(settings.get('chapter_wait_seconds',300)))
+    deadline=time.monotonic()+max(60.0,float(settings.get('chapter_wait_seconds',60)))
     stable_since=None
     last_signature=None
     empty_since=None
@@ -208,17 +208,17 @@ def wait_chapter(page, expected, previous, settings):
             stable_since=None
             last_signature=None
         page.wait_for_timeout(250)
-    # Empty content waits the full configured interval (at least 300 seconds).
+    # Empty content waits the full configured interval (at least 60 seconds).
     # A last-moment DOM change, missing image or unresolved loader cannot pass.
     if empty_result and empty_since is not None and time.monotonic()-empty_since>=30:
         return empty_result
     if settings.get('_diagnostic_path'):
-        save_json(settings['_diagnostic_path'],dict(diagnostics,title=expected,wait_seconds=max(300,float(settings.get('chapter_wait_seconds',300)))))
+        save_json(settings['_diagnostic_path'],dict(diagnostics,title=expected,wait_seconds=max(60,float(settings.get('chapter_wait_seconds',60)))))
     if settings.get('_allow_missing_images') and partial_result and partial_since is not None and time.monotonic()-partial_since>=30:
         print('正文已稳定，但存在未就绪图片；尝试下载实际原图，失败计入本杂志缺失数。')
         return partial_result
     detail='；'.join(diagnostics['reasons']) or '正文内容未稳定或仍为空'
-    raise RuntimeError(f'正文等待至少300秒后仍未通过检查：{detail}；未保存本章：{expected}')
+    raise RuntimeError(f'正文等待至少60秒后仍未通过检查：{detail}；未保存本章：{expected}')
 
 
 def request_image(context, url, referer):
