@@ -32,7 +32,7 @@ class TaskWindow:
         self.pending = None
         self.finished = False
         self.closing = False
-        root.title({'recipes': '爆款菜谱下载', 'books': '电子书下载', 'magazines': '电子杂志下载'}[mode])
+        root.title({'recipes': '爆款菜谱下载', 'books': '电子书下载', 'single-book': '单本电子书下载', 'magazines': '电子杂志下载'}[mode])
         root.geometry('800x600')
         root.minsize(650, 480)
         frame = ttk.Frame(root, padding=20)
@@ -48,7 +48,7 @@ class TaskWindow:
         self.entry = ttk.Entry(row)
         self.entry.pack(side='left', fill='x', expand=True)
         self.entry.bind('<Return>', lambda event: self.submit())
-        self.submit_button = ttk.Button(row, text='确认 / 继续', command=self.submit)
+        self.submit_button = ttk.Button(row, text='开始下载' if mode=='single-book' else '确认 / 继续', command=self.submit)
         self.submit_button.pack(side='left', padx=8)
         self.submit_button.state(['disabled'])
         self.stop_button = ttk.Button(row, text='停止下载', command=self.stop)

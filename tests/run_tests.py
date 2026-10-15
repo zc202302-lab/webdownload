@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for name in ('test_collector.py', 'test_reader_entry.py', 'test_reader_navigation.py', 'test_chapters.py', 'test_modal_scope.py', 'test_scroll_body.py', 'test_catalog_clicks.py', 'test_blank_chapters.py', 'test_missing_images.py', 'test_magazine_retry.py', 'test_recipes.py', 'test_books.py', 'test_modal_close.py', 'test_download_paths.py', 'test_task_process.py', 'test_desktop.py', 'test_auto_update.py'):
+for name in ('test_collector.py', 'test_reader_entry.py', 'test_reader_navigation.py', 'test_single_book.py', 'test_chapters.py', 'test_modal_scope.py', 'test_scroll_body.py', 'test_catalog_clicks.py', 'test_blank_chapters.py', 'test_missing_images.py', 'test_magazine_retry.py', 'test_recipes.py', 'test_books.py', 'test_modal_close.py', 'test_download_paths.py', 'test_task_process.py', 'test_desktop.py', 'test_auto_update.py'):
     print(f'Running {name}', flush=True)
     subprocess.run([sys.executable, str(ROOT / 'tests' / name)], cwd=ROOT, check=True)
 print('All offline checks passed.')

@@ -178,6 +178,7 @@ def run_worker(mode,port,token,test=False):
             if mode=='magazines': from collector import main
             elif mode=='recipes': from recipe_collector import main
             elif mode=='books': from book_collector import main
+            elif mode=='single-book': from book_collector import manual_main as main
             else: raise ValueError('下载模式无效')
             main()
     except KeyboardInterrupt:

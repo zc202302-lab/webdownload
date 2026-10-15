@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import time
+import unicodedata
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -362,7 +363,7 @@ def close_book_reader(page):
         raise RuntimeError('阅读器没有可用关闭按钮，点击左右遮罩后仍未确认关闭，整批暂停。')
 
 
-def batch_books(context, page, items, store, settings):
+def batch_books(context, page, items, store, settings, opened_reader=None):
     for position, item in enumerate(items, 1):
         if store.done(item):
             print(f'已完成，跳过：{item["title"]}')
@@ -373,23 +374,29 @@ def batch_books(context, page, items, store, settings):
         try:
             # Visit the real detail link from the discovered list, rather than
             # constructing reader URLs or bypassing the permission-gated button.
-            response = page.goto(item['source'], wait_until='domcontentloaded', timeout=45000)
-            if response and response.status in (401,403,429):
-                raise PermissionError(f'网站返回{response.status}，请核查阅读权限。')
-            if response and not response.ok:
-                raise RuntimeError(f'详情页返回HTTP {response.status}')
-            stage='打开阅读器'
-            button = page.locator('.reader-btn[data-url]').filter(has_text='立即阅读')
-            button.wait_for(state='visible', timeout=10000)
-            button.click(timeout=10000)
-            frame, value, _ = find_reader(context, timeout=max(60, float(settings['chapter_wait_seconds'])), pages=[page])
+            if opened_reader is None:
+                response = page.goto(item['source'], wait_until='domcontentloaded', timeout=45000)
+                if response and response.status in (401,403,429):
+                    raise PermissionError(f'网站返回{response.status}，请核查阅读权限。')
+                if response and not response.ok:
+                    raise RuntimeError(f'详情页返回HTTP {response.status}')
+                stage='打开阅读器'
+                button = page.locator('.reader-btn[data-url]').filter(has_text='立即阅读')
+                button.wait_for(state='visible', timeout=10000)
+                button.click(timeout=10000)
+                frame, value, _ = find_reader(context, timeout=max(60, float(settings['chapter_wait_seconds'])), pages=[page])
+            else:
+                frame,value,_=opened_reader
             match = re.search(r'/\s*(\d+)', value)
             total = int(match[1])
             print(f'[{position}/{len(items)}] 下载：{item["title"]}，共{total}页')
             stage='下载书页'
             output, work = collect_book(context, frame, total, item, store, settings)
             stage='关闭阅读器'
-            close_book_reader(page)
+            if opened_reader is None or (page.locator('#readerModal').count() and page.locator('#readerModal').is_visible()):
+                close_book_reader(page)
+            else:
+                print('当前为独立阅读页，下载完成；请自行关闭此页，再打开下一本。')
             if hasattr(frame,'page') and frame.page is not page and not frame.page.is_closed():
                 frame.page.close()
             store.update(item, '已完成', pdf=output.relative_to(store.root).as_posix(),
@@ -421,6 +428,82 @@ def batch_books(context, page, items, store, settings):
                     if popup not in baseline and popup is not page and not popup.is_closed():
                         popup.close()
             print('跳过当前电子书，继续下一本。')
+
+
+def normalized_book_title(title):
+    title=unicodedata.normalize('NFKC',title).casefold()
+    return re.sub(r'\s+','',title).replace('《','').replace('》','')
+
+
+def completed_title(store,title):
+    key=normalized_book_title(title)
+    return any(normalized_book_title(record['title'])==key and store.done(record)
+               for record in store.db['books'].values())
+
+
+def manual_reader(context,settings):
+    # Pump browser navigation events before inspecting pages opened by the user.
+    for page in list(context.pages):
+        if not page.is_closed():page.wait_for_timeout(100)
+    frame,value,title=find_reader(context,timeout=max(60,float(settings['chapter_wait_seconds'])))
+    readers=[]
+    for page in list(context.pages):
+        if page.is_closed():continue
+        for candidate in list(page.frames):
+            try:
+                field=candidate.locator('#currentPageIndexTextField')
+                if not candidate.is_detached() and field.count() and field.is_visible():
+                    readers.append(candidate)
+            except Exception:continue
+    if len(readers)!=1 or frame not in readers:
+        raise RuntimeError('请只保留一本已打开的电子书阅读器，关闭其他阅读器后重新输入书名。')
+    page=frame.page
+    sources=[page.url]
+    opener=page.opener()
+    if opener is not None and not opener.is_closed():sources.append(opener.url)
+    for source in sources:
+        try:
+            book_identifier(source)
+            return page,source,(frame,value,title)
+        except ValueError:pass
+    raise RuntimeError('未找到此书的东方美食详情链接。请从电子书详情页点击立即阅读后，再输入书名。')
+
+
+def manual_session(context,store,settings,ask=None):
+    ask=ask or input
+    while True:
+        name=ask('请在软件浏览器打开一本电子书，输入书名后确认开始（输入“退出”结束）：').strip()
+        if name=='退出':return
+        if not normalized_book_title(name):
+            print('书名不能为空，请重新输入。');continue
+        if completed_title(store,name):
+            print(f'已完成且PDF校验通过，按书名跳过：{name}。请打开下一本并输入书名。');continue
+        try:
+            page,source,reader=manual_reader(context,settings)
+        except Exception as exc:
+            print(f'尚未启动下载：{exc}');continue
+        item={'title':name,'source':source}
+        if store.done(item):
+            print('此书的网站ID已完成且PDF校验通过，即使输入不同书名也不重复下载。');continue
+        # Keep the original filename/title when resuming an existing book ID.
+        old=store.db['books'].get(book_identifier(source))
+        if old:item['title']=old['title']
+        batch_books(context,page,[item],store,settings,opened_reader=reader)
+        print('本次单本任务结束，等待你打开下一本并输入书名；不会自动开始下一本。')
+
+
+def manual_main():
+    settings=read_settings(ROOT)
+    store=BookStore(settings['output_path'],settings['reserve_gb'])
+    store.storage.check_space();store.begin_run()
+    with sync_playwright() as playwright:
+        context=launch_browser(playwright)
+        try:
+            page=context.new_page()
+            page.goto(LIST_URL,wait_until='domcontentloaded',timeout=45000)
+            print('单本模式：请在此浏览器自行登录、打开目标书的立即阅读页面；无需扫描全部书籍。')
+            manual_session(context,store,settings)
+        finally:context.close()
 
 
 def main():
