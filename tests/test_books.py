@@ -252,6 +252,26 @@ with tempfile.TemporaryDirectory() as folder:
     page=Detail()
     books.batch_books(None,page,[ITEM],store,SETTINGS)
     assert not page.visited  # Completed PDF is checked before entering details.
+    # A new run removes old log history from both JSON and text, so flushes
+    # cannot resurrect it. PDFs and completion/resume metadata remain intact.
+    pdf_before=pdf.read_bytes()
+    records_before={key:{k:v for k,v in rec.items() if k!='failures'} for key,rec in store.db['books'].items()}
+    store.begin_run()
+    store.flush()
+    new_log=(store.root/'缺失记录.txt').read_text(encoding='utf-8-sig')
+    assert '本轮暂无缺失记录' in new_log and '关闭失败' not in new_log and '页图加载失败' not in new_log
+    assert pdf.read_bytes()==pdf_before and store.done(ITEM)
+    assert store.db['books']==records_before
+    reopened=books.BookStore(root/'output',1)
+    reopened.flush()
+    assert (store.root/'缺失记录.txt').read_text(encoding='utf-8-sig')==new_log
+    # New failures appear normally after clearing the preceding run.
+    store.db['books'][books.book_identifier(ITEM['source'])]['failures']=[{
+        'time':'2026-10-15 20:00:00','stage':'翻页','position':'阅读器第2页','reason':'本轮新错误'}]
+    store.flush()
+    assert '本轮新错误' in (store.root/'缺失记录.txt').read_text(encoding='utf-8-sig')
+    store.begin_run()
+    assert '本轮新错误' not in (store.root/'缺失记录.txt').read_text(encoding='utf-8-sig')
     assert '&lt;测试书&gt;' in (store.root/'电子书目录.html').read_text(encoding='utf-8')
     pdf.write_bytes(b'corrupt')
     assert not store.done(ITEM)

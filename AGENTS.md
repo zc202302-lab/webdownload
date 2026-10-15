@@ -1,5 +1,7 @@
 # 接续开发
 
+v1.0.15电子书每轮main启动在扫描前begin_run：清理电子书记录.json内各书failures历史，重建电子书/缺失记录.txt并写本轮开始时间；无失败写“本轮暂无缺失记录”。仅清日志，不动PDF、完成状态、页图/progress.json。flush重建不会把旧失败带回；本轮新错误正常累计。测试覆盖重复清理、重新载入后flush、完成校验/PDF不变及新失败写入。
+
 v1.0.14用户重新明确要求电子书断点续传及单书失败跳过（替代旧版电子书失败即整批停止；不改变杂志/菜谱）。启动校验所有缓存页的SHA256和解码，页码框定位第一缺失/损坏页；后续已校验连续段也直接跳过，不反复翻阅。全页齐全直接生成PDF。每页/翻页/PDF前原子保存phase与active_page。普通单书错误记录电子书记录.json的failures历史及电子书/缺失记录.txt（时间/书名/链接/阶段/确认页码/原因/当前状态），关闭本书新建弹窗后继续下一本；下次启动可重试失败书并续传。完成书仍在进入详情前校验PDF后跳过。PermissionError/StorageFull记录后暂停；KeyboardInterrupt不吞掉。v1.0.13曾被用户取消撤回，版本号跳至1.0.14。
 
 v1.0.12用户提供实际下一页HTML：DIV.button内嵌data:PNG和pointer-events:none的SPAN“下一页”。ARROW_PROBE额外读取精确textContent标签，nextpage语义优先于三个button right通用候选，点击外层DIV；不依赖left:712px等固定坐标。新增真实结构回归。

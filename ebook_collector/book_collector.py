@@ -108,6 +108,13 @@ class BookStore:
         self.db['books'].setdefault(book_identifier(item['source']), {}).update(item, status=status, **values)
         self.flush()
 
+    def begin_run(self):
+        # Reset only failure history, never completion records or page manifests.
+        self.db['run_started']=time.strftime('%Y-%m-%d %H:%M:%S')
+        for record in self.db['books'].values():
+            record.pop('failures',None)
+        self.flush()
+
     def flush(self):
         save_json(self.path, self.db)
         failures=[]
@@ -116,9 +123,10 @@ class BookStore:
                 failures.append(f'时间：{failure["time"]}\n书名：{record["title"]}（ID {identifier}）\n'
                     f'链接：{record["source"]}\n阶段：{failure["stage"]}\n'
                     f'位置：{failure["position"]}\n原因：{failure["reason"]}\n当前状态：{record["status"]}\n')
-        if failures:
+        if failures or self.db.get('run_started'):
             temporary=self.root/'缺失记录.tmp'
-            temporary.write_text('\n'.join(failures),encoding='utf-8-sig')
+            header=f'本轮开始：{self.db.get("run_started","未记录")}\n\n'
+            temporary.write_text(header+('\n'.join(failures) if failures else '本轮暂无缺失记录。\n'),encoding='utf-8-sig')
             temporary.replace(self.root/'缺失记录.txt')
         rows = []
         for identifier, record in self.db['books'].items():
@@ -419,6 +427,7 @@ def main():
     settings = read_settings(ROOT)
     store = BookStore(settings['output_path'], settings['reserve_gb'])
     store.storage.check_space()
+    store.begin_run()
     with sync_playwright() as playwright:
         context = launch_browser(playwright)
         try:
