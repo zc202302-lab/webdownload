@@ -1,5 +1,7 @@
 # 接续开发
 
+v1.0.14用户重新明确要求电子书断点续传及单书失败跳过（替代旧版电子书失败即整批停止；不改变杂志/菜谱）。启动校验所有缓存页的SHA256和解码，页码框定位第一缺失/损坏页；后续已校验连续段也直接跳过，不反复翻阅。全页齐全直接生成PDF。每页/翻页/PDF前原子保存phase与active_page。普通单书错误记录电子书记录.json的failures历史及电子书/缺失记录.txt（时间/书名/链接/阶段/确认页码/原因/当前状态），关闭本书新建弹窗后继续下一本；下次启动可重试失败书并续传。完成书仍在进入详情前校验PDF后跳过。PermissionError/StorageFull记录后暂停；KeyboardInterrupt不吞掉。v1.0.13曾被用户取消撤回，版本号跳至1.0.14。
+
 v1.0.12用户提供实际下一页HTML：DIV.button内嵌data:PNG和pointer-events:none的SPAN“下一页”。ARROW_PROBE额外读取精确textContent标签，nextpage语义优先于三个button right通用候选，点击外层DIV；不依赖left:712px等固定坐标。新增真实结构回归。
 
 v1.0.11更新API返回403/429时备用查询github.com本项目/releases/latest真实重定向正式tag，以EXE的HEAD Content-Length取得实际大小，仍要求parse_release项目地址/版本/大小检查及SHA256/候选自检。备用也失败明确显示两阶段原因与手动更新方式；不添加Token/第三方镜像。旧EXE不会自动获得修复，查询受限时首次需手动替换。
@@ -50,5 +52,3 @@ tests/test_books.py测试扫描慢加载/失败/去重、页码/双页/缺图/�
 Windows便携EXE：desktop_app.py提供杂志/菜谱启动入口和检查更新按钮。app_runtime.app_root在冻结后必须指向EXE所在文件夹，不能写入PyInstaller解压临时目录。使用--windowed打包，不打开CMD；task_window.py在独立图形任务进程中桥接原input/print，提供停止和继续按钮，保留原续传行为。检查更新读取本仓库GitHub正式Release，下载EXE和SHA256SUMS，校验并运行候选EXE --self-test，独立无控制台helper等旧进程退出后仅替换EXE并自动重启；失败回滚，.updates内保留previous.exe备份。下载任务窗口未关闭时不允许更新。不得覆盖设置、浏览器资料、PDF或进度。VERSION每次正式发布递增。Windows运行build_windows.py打包；GitHub Actions在Windows上运行全部离线测试、EXE界面/提示输入/PDF/无控制台测试及真实helper替换/重启/数据保留测试后发布。不包含浏览器，使用本机Edge/Chrome。不要将用户数据放入发行包。
 
 用户允许跳过杂志原本空白的目录：须识别到正文区域，完整等待至少300秒且末尾30秒持续为空，无正文文字、图片元素、加载/错误/权限提示或其他未支持媒体；关闭弹窗后记录空白并继续，不生成空PDF。缺图、图片加载失败和未识别正文仍终止。合并书签只包含实际保存的章节；总目录记录跳过的空白标题。全书空白保存带校验值的进度记录，pages=0，不生成PDF。短文字也须保留。该功能仅适用于杂志目录模式。
-
-

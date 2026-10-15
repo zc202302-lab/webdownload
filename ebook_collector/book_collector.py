@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from playwright.sync_api import sync_playwright
 from chapter_reader import download_best
 from collector import ROOT, build_pdf, find_reader, launch_browser, page_number, verified, recover_reader
-from library_manager import Library, file_hash, read_settings, safe_name, save_json, validate_pdf
+from library_manager import Library, StorageFull, file_hash, read_settings, safe_name, save_json, validate_pdf
 
 LIST_URL = 'https://www.easteat.com/book_list.php?category=books'
 
@@ -110,6 +110,16 @@ class BookStore:
 
     def flush(self):
         save_json(self.path, self.db)
+        failures=[]
+        for identifier,record in self.db['books'].items():
+            for failure in record.get('failures',[]):
+                failures.append(f'时间：{failure["time"]}\n书名：{record["title"]}（ID {identifier}）\n'
+                    f'链接：{record["source"]}\n阶段：{failure["stage"]}\n'
+                    f'位置：{failure["position"]}\n原因：{failure["reason"]}\n当前状态：{record["status"]}\n')
+        if failures:
+            temporary=self.root/'缺失记录.tmp'
+            temporary.write_text('\n'.join(failures),encoding='utf-8-sig')
+            temporary.replace(self.root/'缺失记录.txt')
         rows = []
         for identifier, record in self.db['books'].items():
             title = html.escape(record['title'])
@@ -147,7 +157,7 @@ def reader_images(frame):
         .filter(Boolean).map(s=>new URL(s,e.baseURI).href)}))''')
 
 
-def wait_pages(frame, expected, total, settings, work):
+def wait_pages(frame, expected, total, settings, work, seeking=False):
     deadline = time.monotonic() + max(60, float(settings.get('chapter_wait_seconds', 60)))
     previous, stable = None, None
     snapshot = {}
@@ -160,7 +170,7 @@ def wait_pages(frame, expected, total, settings, work):
         selected = {n: [im for im in images if page_number(im['src']) == n] for n in pages}
         snapshot = {'page_field': value, 'requested_page': expected,
                     'image_pages': [page_number(im['src']) for im in images]}
-        if pages[0] > expected:
+        if pages[0] > expected and not seeking:
             save_json(work / 'diagnostic.json', snapshot)
             raise RuntimeError(f'翻页跳过了尚未保存的第{expected}页，已停止并保留进度。')
         if expected in pages and all(selected[n] and all(im['ready'] for im in selected[n]) for n in pages):
@@ -263,20 +273,34 @@ def collect_book(context, frame, total, item, store, settings):
         'source': item['source'], 'total': total, 'pages': {}}
     if manifest['total'] != total or book_identifier(manifest['source']) != book_identifier(item['source']):
         raise RuntimeError('阅读器总页数或书籍与原进度不一致，已停止。')
-    initial = displayed_pages(frame.locator('#currentPageIndexTextField').input_value(), total)
-    if initial[0] != 1:
-        # Only rewind at startup. Subsequent navigation always clicks the arrow.
-        field = frame.locator('#currentPageIndexTextField')
-        field.fill('1')
-        field.press('Enter')
-    expected = 1
+    valid=set()
+    for number in range(1,total+1):
+        store.storage.check_space()
+        old=manifest['pages'].get(str(number),{})
+        if old.get('sha256') and verified(work/f'{number:04d}.jpg',old['sha256']):
+            valid.add(number)
+    expected=next((n for n in range(1,total+1) if n not in valid),total+1)
+    seeking=False
+    if expected<=total:
+        initial=displayed_pages(frame.locator('#currentPageIndexTextField').input_value(),total)
+        if expected not in initial:
+            field=frame.locator('#currentPageIndexTextField')
+            field.fill(str(expected));field.press('Enter');seeking=True
+        print(f'继续下载：已校验{len(valid)}页，从第{expected}页开始。')
+    else:
+        print(f'全部{total}页已校验，直接生成PDF。')
     while expected <= total:
         store.storage.check_space()
+        manifest.update(active_page=expected,phase='加载或下载页面')
+        save_json(path,manifest)
         frame=recover_reader(frame,settings,expected)
-        pages, selected = wait_pages(frame, expected, total, settings, work)
+        pages, selected = wait_pages(frame, expected, total, settings, work,seeking=seeking)
+        seeking=False
         if pages[0] > expected:
             raise RuntimeError('翻页跳过了尚未保存的页面，已停止。')
         for number in pages:
+            manifest.update(active_page=number,phase='下载页面原图')
+            save_json(path,manifest)
             image_path = work / f'{number:04d}.jpg'
             old = manifest['pages'].get(str(number), {})
             if not (old and verified(image_path, old.get('sha256'))):
@@ -290,16 +314,27 @@ def collect_book(context, frame, total, item, store, settings):
                 part.replace(image_path)
                 manifest['pages'][str(number)] = {'sha256': file_hash(image_path), 'size': list(best[2]), 'source': best[3]}
                 save_json(path, manifest)
+                valid.add(number)
                 print(f'[{number}/{total}] 已保存原图 {best[2][0]}×{best[2][1]}')
             else:
                 print(f'[{number}/{total}] 校验通过，复用已保存页')
         expected = pages[-1]+1
+        while expected in valid:
+            expected+=1
         if expected <= total:
-            next_arrow(frame, work)
+            manifest.update(active_page=expected,phase='翻页或恢复断点')
+            save_json(path,manifest)
+            if expected==pages[-1]+1:
+                next_arrow(frame, work)
+            else:
+                field=frame.locator('#currentPageIndexTextField')
+                field.fill(str(expected));field.press('Enter');seeking=True
     images = [work / f'{n:04d}.jpg' for n in range(1, total+1)]
     if not all(verified(p, manifest['pages'].get(str(n), {}).get('sha256')) for n,p in enumerate(images,1)):
         raise RuntimeError('全书页面校验失败，未生成PDF。')
     store.storage.check_space(sum(p.stat().st_size for p in images)*2 + 64*1024*1024)
+    manifest.update(active_page=None,phase='生成PDF')
+    save_json(path,manifest)
     build_pdf(images, output)
     validate_pdf(output, total)
     # Completion is committed only AFTER successfully closing the reader.
@@ -325,6 +360,8 @@ def batch_books(context, page, items, store, settings):
             print(f'已完成，跳过：{item["title"]}')
             continue
         store.update(item, '处理中', reason='')
+        baseline=set(context.pages) if context is not None else set()
+        stage='打开详情页'
         try:
             # Visit the real detail link from the discovered list, rather than
             # constructing reader URLs or bypassing the permission-gated button.
@@ -333,6 +370,7 @@ def batch_books(context, page, items, store, settings):
                 raise PermissionError(f'网站返回{response.status}，请核查阅读权限。')
             if response and not response.ok:
                 raise RuntimeError(f'详情页返回HTTP {response.status}')
+            stage='打开阅读器'
             button = page.locator('.reader-btn[data-url]').filter(has_text='立即阅读')
             button.wait_for(state='visible', timeout=10000)
             button.click(timeout=10000)
@@ -340,7 +378,9 @@ def batch_books(context, page, items, store, settings):
             match = re.search(r'/\s*(\d+)', value)
             total = int(match[1])
             print(f'[{position}/{len(items)}] 下载：{item["title"]}，共{total}页')
+            stage='下载书页'
             output, work = collect_book(context, frame, total, item, store, settings)
+            stage='关闭阅读器'
             close_book_reader(page)
             if hasattr(frame,'page') and frame.page is not page and not frame.page.is_closed():
                 frame.page.close()
@@ -349,8 +389,30 @@ def batch_books(context, page, items, store, settings):
             if not settings.get('keep_page_images'):
                 shutil.rmtree(work)
         except Exception as exc:
-            store.update(item, '未完成已终止', reason=str(exc)[:500])
-            raise RuntimeError(f'电子书“{item["title"]}”未完成，整批终止，进度已保留：{exc}') from exc
+            position_text='未确认页码'
+            if stage=='下载书页':
+                progress=store.paths(item)[1]/'progress.json'
+                try:
+                    saved=json.loads(progress.read_text(encoding='utf-8'))
+                    stage=saved.get('phase',stage)
+                    if saved.get('active_page'):
+                        position_text=f'阅读器第{saved["active_page"]}页'
+                except (OSError,ValueError):pass
+            fatal=isinstance(exc,(PermissionError,StorageFull))
+            record=store.db['books'][book_identifier(item['source'])]
+            record.setdefault('failures',[]).append({'time':time.strftime('%Y-%m-%d %H:%M:%S'),
+                'stage':stage,'position':position_text,'reason':str(exc)[:1000]})
+            store.update(item,'未完成已暂停' if fatal else '下载失败已跳过',reason=str(exc)[:500])
+            print(f'电子书“{item["title"]}”失败，进度保留，已记入缺失记录.txt：{exc}')
+            if fatal:
+                raise
+            # Discard only popups created by this book. Next detail navigation
+            # replaces a stuck modal on the owned work page.
+            if context is not None:
+                for popup in list(context.pages):
+                    if popup not in baseline and popup is not page and not popup.is_closed():
+                        popup.close()
+            print('跳过当前电子书，继续下一本。')
 
 
 def main():
@@ -366,7 +428,8 @@ def main():
             page.goto(LIST_URL, wait_until='domcontentloaded', timeout=45000)
             items = discover_books(page, store, settings)
             batch_books(context, page, items, store, settings)
-            print(f'完成。打开：{store.root / "电子书目录.html"}')
+            failed=sum(store.db['books'].get(book_identifier(item['source']),{}).get('status')=='下载失败已跳过' for item in items)
+            print(f'本轮结束：{failed}本失败已跳过；详见缺失记录.txt。打开：{store.root / "电子书目录.html"}')
         finally:
             context.close()
 

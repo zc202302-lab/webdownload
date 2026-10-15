@@ -75,6 +75,7 @@ class Field:
 
     def press(self, key):
         assert key == 'Enter'
+        self.frame.seeks.append(self.value)
         self.frame.current = self.value
 
 
@@ -102,6 +103,7 @@ class Frame:
     def __init__(self, clock, total=3, double=False, missing=False):
         self.clock, self.total, self.double, self.missing = clock, total, double, missing
         self.current, self.clicks = 1, 0
+        self.seeks=[]
 
     def pages(self):
         if self.double and self.current == 2:
@@ -163,7 +165,7 @@ with tempfile.TemporaryDirectory() as folder:
         with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()), patch.object(books, 'download_best', download):
             pdf, work = books.collect_book(None, frame, 3, ITEM, store, SETTINGS)
         assert validate_pdf(pdf, 3) == 3
-        assert frame.clicks == (1 if double else 2)
+        assert frame.clicks == (0 if double else 2)
         assert work.exists() and not store.done(ITEM)  # Not committed until close.
     assert downloads == [1,2,3]  # Second run reused checksummed original pages.
     _, work = store.paths(ITEM)
@@ -173,6 +175,15 @@ with tempfile.TemporaryDirectory() as folder:
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()), patch.object(books, 'download_best', download):
         books.collect_book(None, frame, 3, ITEM, store, SETTINGS)
     assert downloads == [1,2,3,2]
+    assert frame.seeks==[2] and frame.clicks==0
+    progress=json.loads((work/'progress.json').read_text())
+    del progress['pages']['3']
+    (work/'progress.json').write_text(json.dumps(progress))
+    (work/'0003.jpg').unlink()
+    clock=Clock();frame=Frame(clock)
+    with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'reader_images',lambda f:f.images()),patch.object(books,'download_best',download):
+        books.collect_book(None,frame,3,ITEM,store,SETTINGS)
+    assert frame.seeks==[3] and frame.clicks==0 and downloads==[1,2,3,2,3]
     clock = Clock()
     frame = Frame(clock, missing=True)
     with patch.object(books.time, 'monotonic', clock.monotonic), patch.object(books, 'reader_images', lambda f: f.images()):
@@ -212,14 +223,37 @@ with tempfile.TemporaryDirectory() as folder:
 
     page = Detail()
     with patch.object(books, 'find_reader', return_value=(Frame(Clock()), '1/3', '测试书')), patch.object(books, 'collect_book', return_value=(pdf,work)), patch.object(books, 'close_book_reader', side_effect=RuntimeError('关闭失败')):
-        expect_failure(lambda: books.batch_books(None, page, [ITEM,SECOND], store, SETTINGS), '关闭失败')
-    assert page.visited == [ITEM['source']] and not store.done(ITEM) and work.exists()
+        books.batch_books(None, page, [ITEM,SECOND], store, SETTINGS)
+    assert page.visited == [ITEM['source'],SECOND['source']] and not store.done(ITEM) and work.exists()
+    log=(store.root/'缺失记录.txt').read_text(encoding='utf-8-sig')
+    assert '关闭失败' in log and ITEM['title'] in log and SECOND['title'] in log
+    # Ordinary first-book failure does not prevent the second book succeeding.
+    saved=json.loads((work/'progress.json').read_text())
+    saved.update(active_page=3,phase='下载页面原图')
+    (work/'progress.json').write_text(json.dumps(saved))
+    page=Detail()
+    with patch.object(books,'find_reader',return_value=(Frame(Clock()),'1/3','测试书')),patch.object(books,'collect_book',side_effect=[RuntimeError('页图加载失败'),(pdf,work)]),patch.object(books,'close_book_reader'):
+        books.batch_books(None,page,[ITEM,SECOND],store,{**SETTINGS,'keep_page_images':True})
+    assert page.visited==[ITEM['source'],SECOND['source']] and store.done(SECOND) and not store.done(ITEM)
+    log=(store.root/'缺失记录.txt').read_text(encoding='utf-8-sig')
+    assert '页图加载失败' in log and '第3页' in log
+    # Explicit access/storage failures and a user's stop are not ordinary skips.
+    for error in (PermissionError('网站返回403'),books.StorageFull('空间不足'),KeyboardInterrupt()):
+        page=Detail()
+        with patch.object(books,'find_reader',return_value=(Frame(Clock()),'1/3','测试书')),patch.object(books,'collect_book',side_effect=error):
+            try:books.batch_books(None,page,[ITEM,SECOND],store,SETTINGS)
+            except type(error):pass
+            else:raise AssertionError('pause/stop was swallowed')
+        assert page.visited==[ITEM['source']]
     page = Detail()
     with patch.object(books, 'find_reader', return_value=(Frame(Clock()), '1/3', '测试书')), patch.object(books, 'collect_book', return_value=(pdf,work)), patch.object(books, 'close_book_reader') as close:
         books.batch_books(None, page, [ITEM], store, SETTINGS)
     assert close.call_count == 1 and store.done(ITEM) and not work.exists()
+    page=Detail()
+    books.batch_books(None,page,[ITEM],store,SETTINGS)
+    assert not page.visited  # Completed PDF is checked before entering details.
     assert '&lt;测试书&gt;' in (store.root/'电子书目录.html').read_text(encoding='utf-8')
     pdf.write_bytes(b'corrupt')
     assert not store.done(ITEM)
 
-print('PASS: slow scroll discovery, deduplication, explicit end, errors, 60-second waits, single/double-page arrows, blank originals, PDF, checksummed resume, close-before-completion and stop-on-failure')
+print('PASS: discovery, page checks, direct verified resume, completed-book skip, failure log/continue, access/storage pause and cancellation')
