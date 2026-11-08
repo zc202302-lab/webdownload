@@ -178,7 +178,7 @@ def catalogue_rows(page, expected_year):
     })""")
     result = {}
     for row in rows:
-        year = re.search(r'(19\d{2}|20\d{2})年', row['title'])
+        year = re.search(r'(?<!\d)(19\d{2}|20\d{2})(?:年|(?=《))', row['title'])
         if year and year.group(1) == str(expected_year):
             if urlparse(row['source']).hostname != urlparse(page.url).hostname:
                 continue
@@ -511,10 +511,17 @@ def prompt_reading_mode(settings, settings_path):
     print('本次方式：直接从杂志目录进入。' if choice != '2' else '本次方式：先使用立即阅读。')
 
 
-def main():
+def main(target_url=None, target_years=None):
     settings = read_settings(ROOT)
-    prompt_start_year(settings, ROOT / 'settings.json')
-    prompt_reading_mode(settings, ROOT / 'settings.json')
+    if target_url is not None:
+        if target_url != 'https://www.easteat.com/book_list.php?category=dianzikan&year=2025' or target_years != [2026, 2025]:
+            raise ValueError('专用入口仅支持电子刊2025、2026年。')
+        # Session-only overrides: retain the user's output, profile and saved defaults.
+        settings = dict(settings, years=list(target_years), start_year=max(target_years), reading_mode='chapters')
+        print('本次仅下载：东方美食电子刊2026、2025年；逐条点击杂志目录。')
+    else:
+        prompt_start_year(settings, ROOT / 'settings.json')
+        prompt_reading_mode(settings, ROOT / 'settings.json')
     library = Library(settings['output_path'], settings['reserve_gb'])
     library.check_space()
     library.flush()
@@ -524,10 +531,13 @@ def main():
     with sync_playwright() as p:
         context = launch_browser(p)
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto('https://www.easteat.com/book_list.php')
+        page.goto(target_url or 'https://www.easteat.com/book_list.php')
         input('栏目页显示年份标签后，回到此窗口按回车开始按起始年份采集：')
+        # Dedicated runs return to the exact requested list after manual sign-in.
+        if target_url is not None:
+            page.goto(target_url)
         # The user may select a magazine category in a newly opened tab.
-        for candidate in reversed(context.pages):
+        for candidate in ([] if target_url is not None else reversed(context.pages)):
             try:
                 candidate.wait_for_timeout(200)
                 discover_years(candidate, settings)

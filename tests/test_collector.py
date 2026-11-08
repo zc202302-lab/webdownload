@@ -48,6 +48,37 @@ def run():
         try:library.check_space()
         except StorageFull:pass
         else:raise AssertionError('disk reserve not enforced')
+    # Actual electronic-journal titles prefix the year without the 年 suffix.
+    class CardRows:
+        def filter(self, **kwargs): return self
+        def evaluate_all(self, script):
+            return [dict(source='https://www.easteat.com/magazine_detail.php?id='+str(i), title=t)
+                    for i,t in enumerate(['2025《东方美食》12月（下）','《烹饪艺术家》2025年4期','2026《东方美食》1月','12025《无关》'])]
+    class ElectronicList:
+        url='https://www.easteat.com/book_list.php?category=dianzikan&year=2025'
+        def locator(self, *args): return CardRows()
+    assert len(c.catalogue_rows(ElectronicList(), 2025)) == 2
+    assert len(c.catalogue_rows(ElectronicList(), 2026)) == 1
+    # Dedicated deployment overrides only this run, including stale saved year limits.
+    from unittest.mock import MagicMock
+    saved=dict(output_path=root,reserve_gb=1,years=[2020],start_year=2020,reading_mode='auto')
+    browser=MagicMock(); page=MagicMock(); browser.pages=[page]
+    runtime=MagicMock(); runtime.__enter__.return_value=object()
+    def verify_target(context, selected, actual, lib):
+        assert context is browser and selected is page
+        assert actual['years']==[2026,2025] and actual['start_year']==2026
+        assert actual['reading_mode']=='chapters' and actual['output_path']==root
+        assert c.discover_years(Catalog2026(),actual)==[2026,2025]
+    class Catalog2026:
+        def locator(self,*args):
+            obj=MagicMock(); obj.all_text_contents.return_value=['2027年','2026年','2025年','2024年']; return obj
+    target='https://www.easteat.com/book_list.php?category=dianzikan&year=2025'
+    with patch.object(c,'read_settings',return_value=saved), patch.object(c,'Library'), patch.object(c,'sync_playwright',return_value=runtime), patch.object(c,'launch_browser',return_value=browser), patch.object(c,'batch_all_years',side_effect=verify_target), patch.object(c,'prompt_start_year') as prompt, patch('missing_records.write_missing_report'), patch('builtins.input',return_value=''):
+        c.main(target_url=target,target_years=[2026,2025])
+        prompt.assert_not_called()
+        assert page.goto.call_count==2 and page.goto.call_args.args==(target,)
+        browser.close.assert_called_once()
+    assert saved['years']==[2020] and saved['reading_mode']=='auto'
     # Source identity is stable through fragment changes.
     assert book_id(task['source']+'#part')==task['id']
     class Frame: url='https://example.com/book/mobile/index.html'
