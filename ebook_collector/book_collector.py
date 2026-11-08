@@ -201,6 +201,11 @@ class BookStore:
 
 
 def displayed_pages(value, total):
+    if re.fullmatch(r'\s*\d+\s*', value):
+        number=int(value)
+        if not 1<=number<=total:
+            raise RuntimeError(f'阅读器页码范围异常：{value}')
+        return [number]
     match = re.fullmatch(r'\s*(\d+)(?:\s*[-–]\s*(\d+))?\s*/\s*(\d+)\s*', value)
     if not match or int(match[3]) != total:
         raise RuntimeError(f'阅读器页码异常：{value}')
@@ -212,6 +217,10 @@ def displayed_pages(value, total):
 
 def reader_images(frame):
     return frame.locator('img').evaluate_all(r'''es => es.map(e=>({
+      visible:(()=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+        return r.width>0 && r.height>0 && r.right>0 && r.bottom>0
+          && r.left<innerWidth && r.top<innerHeight && s.display!=='none'
+          && s.visibility!=='hidden' && Number(s.opacity)!==0;})(),
       src:e.currentSrc || e.src,ready:e.complete && e.naturalWidth>0 && e.naturalHeight>0,
       sources:[e.getAttribute('data-original'),e.getAttribute('data-src'),e.getAttribute('data-large'),
         ...(e.getAttribute('srcset') || '').split(',').map(s=>s.trim().split(/\s+/)[0])]
@@ -226,6 +235,19 @@ def wait_pages(frame, expected, total, settings, work, seeking=False):
         value = frame.locator('#currentPageIndexTextField').input_value()
         pages = displayed_pages(value, total)
         images = reader_images(frame)
+        snapshot={'page_field':value,'requested_page':expected,'image_pages':[page_number(im['src']) for im in images]}
+        if re.fullmatch(r'\s*\d+\s*',value):
+            # A seek can leave just '12' in the input. Verify actual visible pages;
+            # preloaded and hidden images cannot establish a displayed spread.
+            images=[im for im in images if im.get('visible')]
+            visible_pages=sorted({n for im in images if (n:=page_number(im['src'])) is not None and 1<=n<=total})
+            if (pages[0] in visible_pages and 1<=len(visible_pages)<=2
+                    and visible_pages[-1]-visible_pages[0]==len(visible_pages)-1):
+                pages=visible_pages
+            else:
+                previous,stable=None,None
+                frame.wait_for_timeout(250)
+                continue
         # Numerical image filenames are required; never infer book page order
         # from arbitrary preload images or the printed folio on the paper.
         selected = {n: [im for im in images if page_number(im['src']) == n] for n in pages}

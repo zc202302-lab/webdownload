@@ -105,6 +105,13 @@ def find_reader(context, timeout=60, pages=None):
                         field = frame.locator('#currentPageIndexTextField')
                         if reader_field_ready(frame, field):
                             value = field.input_value(timeout=2000)
+                            if re.fullmatch(r'\s*\d+\s*',value):
+                                # The reader may retain its original total in the DOM value
+                                # attribute after the seek field property becomes just '12'.
+                                original=field.get_attribute('value') or ''
+                                total=re.search(r'/\s*(\d+)\s*$',original)
+                                if total and 1<=int(value)<=int(total[1]):
+                                    value=f'{int(value)}/{int(total[1])}'
                             if re.search(r'/\s*\d+', value):
                                 title = frame.locator('title').text_content(timeout=2000) or '电子书'
                                 return frame, value, title

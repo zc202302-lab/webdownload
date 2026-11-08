@@ -278,3 +278,22 @@ with tempfile.TemporaryDirectory() as folder:
     assert not store.done(ITEM)
 
 print('PASS: discovery, page checks, direct verified resume, completed-book skip, failure log/continue, access/storage pause and cancellation')
+
+# Regression: seek leaves bare '12', visible spread is 12-13, with hidden preload 14.
+from unittest.mock import MagicMock
+for visible_numbers in ([12],[12,13]):
+ clock=Clock();frame=MagicMock();frame.locator.return_value.input_value.return_value='12'
+ frame.wait_for_timeout.side_effect=clock.wait
+ images=[dict(src=f'https://reader.test/{n}.jpg',ready=True,visible=True) for n in visible_numbers]
+ images.append(dict(src='https://reader.test/14.jpg',ready=True,visible=False))
+ with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'reader_images',return_value=images):
+  pages,selected=books.wait_pages(frame,12,42,SETTINGS,work)
+  assert pages==visible_numbers and sorted(selected)==visible_numbers
+# Typed value alone cannot authorize old/preload images as the requested page.
+clock=Clock();frame=MagicMock();frame.locator.return_value.input_value.return_value='12';frame.wait_for_timeout.side_effect=clock.wait
+with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'reader_images',return_value=[dict(src='https://reader.test/12.jpg',ready=True,visible=False)]):
+ expect_failure(lambda:books.wait_pages(frame,12,42,SETTINGS,work),'至少60秒')
+assert books.displayed_pages('12',42)==[12]
+for invalid in ('0','43'):
+ expect_failure(lambda:books.displayed_pages(invalid,42),'页码范围')
+print('PASS: bare numeric seek fields, verified visible single/double spread, hidden preload rejection and bounds')
