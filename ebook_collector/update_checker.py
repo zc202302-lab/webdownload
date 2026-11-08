@@ -14,6 +14,7 @@ from app_runtime import VERSION
 REPO = 'zc202302-lab/webdownload'
 RELEASES_URL = f'https://github.com/{REPO}/releases'
 API_URL = f'https://api.github.com/repos/{REPO}/releases/latest'
+CHANNEL_URL = f'https://raw.githubusercontent.com/{REPO}/update-channel/update.json'
 
 
 def version_tuple(value):
@@ -86,7 +87,7 @@ def check_public_release():
         {'name':'SHA256SUMS.txt','browser_download_url':prefix+'SHA256SUMS.txt'}]})
 
 
-def check_update():
+def check_legacy_update():
     request = Request(API_URL, headers={'Accept': 'application/vnd.github+json',
                                        'User-Agent': 'WebDownload/' + VERSION})
     try:
@@ -105,7 +106,50 @@ def check_update():
         return fallback_release(f'GitHub API连接失败（{type(exc).__name__}）')
 
 
+def parse_channel(data, current=VERSION):
+    release=parse_release(data,current)
+    commit=data.get('asset_commit','')
+    digest=data.get('sha256','')
+    if not re.fullmatch(r'[0-9a-f]{40}',commit) or not re.fullmatch(r'[0-9a-f]{64}',digest):
+        raise ValueError('更新通道的固定版本或校验值无效')
+    release['fallback_exe_url']=release['exe_url']
+    release['fallback_checksum_url']=release['checksum_url']
+    prefix=f'https://raw.githubusercontent.com/{REPO}/{commit}/'
+    release.update(exe_url=prefix+'WebDownload.exe',checksum_url=prefix+'SHA256SUMS.txt',sha256=digest)
+    return release
+
+
+def check_channel():
+    with open_remote(Request(CHANNEL_URL,headers={'User-Agent':'WebDownload/'+VERSION,'Cache-Control':'no-cache'}),timeout=15) as response:
+        data=response.read(1024*1024+1)
+    if len(data)>1024*1024:raise RuntimeError('更新通道信息过大')
+    return parse_channel(json.loads(data))
+
+
+def check_update():
+    try:
+        return check_channel()
+    except Exception as channel_error:
+        try:
+            return check_legacy_update()
+        except Exception as legacy_error:
+            raise RuntimeError(f'独立更新通道失败：{channel_error}；原发布通道失败：{legacy_error}。当前程序未修改。') from None
+
+
 def download_update(release, root, progress=None):
+    try:
+        return download_update_one(release,root,progress)
+    except (URLError,TimeoutError,OSError,HTTPException) as primary:
+        if not release.get('fallback_exe_url'):
+            raise RuntimeError(f'下载更新文件失败：{primary}。当前程序未修改。') from None
+        alternate=dict(release,exe_url=release['fallback_exe_url'],checksum_url=release['fallback_checksum_url'])
+        try:
+            return download_update_one(alternate,root,progress)
+        except Exception as secondary:
+            raise RuntimeError(f'独立通道下载失败：{primary}；备用通道下载失败：{secondary}。当前程序未修改。') from None
+
+
+def download_update_one(release, root, progress=None):
     """Stage only a hash-verified EXE. The running executable is never touched."""
     root = Path(root)
     if shutil.disk_usage(root).free < release['size'] * 3 + 64 * 1024 * 1024:
@@ -119,6 +163,8 @@ def download_update(release, root, progress=None):
     if len(matches) != 1:
         raise RuntimeError('校验文件缺少唯一的EXE校验值')
     expected = matches[0].lower()
+    if release.get('sha256') and release['sha256']!=expected:
+        raise RuntimeError('更新清单与校验文件不一致，已拒绝更新。')
     update_root = root / '.updates'
     update_root.mkdir(exist_ok=True)
     folder = Path(tempfile.mkdtemp(prefix='version-', dir=update_root))

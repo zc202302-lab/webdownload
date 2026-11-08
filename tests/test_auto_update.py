@@ -28,7 +28,7 @@ for status in (403,429,408,500,502,503,504):
         assert request.get_method()=='HEAD'
         return WebResponse(request.full_url)
     with patch.object(checks,'urlopen',side_effect=limited):
-        found=checks.check_update()
+        found=checks.check_legacy_update()
     assert found['available'] and found['size']==12345 and found['version']=='v99.0.0'
     assert len(calls)==(3 if status in (403,429) else 4)
 for url,size in [('https://evil.test/tag/v99.0.0','12345'),
@@ -137,8 +137,32 @@ print('PASS: main-loop startup acknowledgement, failed/timeout startup detection
 from urllib.error import URLError
 for error in (TimeoutError('timeout'),URLError('offline')):
  with patch.object(checks,'urlopen',side_effect=error) as connection,patch.object(checks,'check_public_release',return_value={'version':'v9.0.0'}) as fallback:
-  assert checks.check_update()['version']=='v9.0.0'
+  assert checks.check_legacy_update()['version']=='v9.0.0'
   assert connection.call_count==2 and fallback.call_count==1
 with patch.object(checks,'urlopen',side_effect=[HTTPError(checks.API_URL,504,'timeout',{},None),'ok']) as connection:
  assert checks.open_remote(object())=='ok' and connection.call_count==2
 print('PASS: transient HTTP and network retry, 504/timeout public fallback')
+
+# Independent metadata remains pinned to this repository and immutable payload commit.
+channel={'tag_name':'v99.0.0','html_url':checks.RELEASES_URL+'/tag/v99.0.0','asset_commit':'a'*40,'sha256':'b'*64,
+ 'assets':[{'name':'WebDownload.exe','size':100,'browser_download_url':checks.RELEASES_URL+'/download/v99.0.0/WebDownload.exe'},
+ {'name':'SHA256SUMS.txt','browser_download_url':checks.RELEASES_URL+'/download/v99.0.0/SHA256SUMS.txt'}]}
+parsed=checks.parse_channel(channel)
+assert parsed['available'] and parsed['exe_url']==f'https://raw.githubusercontent.com/{checks.REPO}/'+ 'a'*40+'/WebDownload.exe'
+for changes in ({'asset_commit':'main'},{'sha256':'invalid'},{'html_url':'https://evil.test/releases/tag/v99.0.0'}):
+ try: checks.parse_channel(dict(channel,**changes))
+ except ValueError:pass
+ else:raise AssertionError('unsafe independent channel accepted')
+with patch.object(checks,'check_channel',return_value=parsed),patch.object(checks,'check_legacy_update',side_effect=AssertionError('should not need blocked release endpoint')):
+ assert checks.check_update()==parsed
+with patch.object(checks,'check_channel',side_effect=TimeoutError()),patch.object(checks,'check_legacy_update',return_value=parsed):
+ assert checks.check_update()==parsed
+with patch.object(checks,'download_update_one',side_effect=[HTTPError('url',504,'gateway',{},None),('candidate','hash')]) as download:
+ assert checks.download_update(parsed,Path('.'))==('candidate','hash')
+ assert download.call_args_list[1].args[0]['exe_url']==parsed['fallback_exe_url']
+with patch.object(checks,'download_update_one',side_effect=RuntimeError('SHA256 mismatch')) as download:
+ try: checks.download_update(parsed,Path('.'))
+ except RuntimeError:pass
+ else:raise AssertionError('checksum failure ignored')
+ assert download.call_count==1
+print('PASS: independent channel validation, metadata/download failover, immutable payload and strict tamper failure')

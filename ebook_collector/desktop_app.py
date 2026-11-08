@@ -232,6 +232,7 @@ class App:
         self.update_button.state(['disabled'])
         self.status.set('正在检查更新……')
         def worker():
+            stage='查询更新版本'
             try:
                 release = check_update()
                 if not release['available']:
@@ -245,12 +246,14 @@ class App:
                     if percent != last_progress[0] and (percent == 100 or now - last_progress[1] >= 0.3):
                         last_progress[:] = [percent, now]
                         self.events.put(('progress', f'正在下载更新：{percent}%'))
+                stage='下载更新程序'
                 candidate, expected = download_update(release, app_root(), progress)
                 self.events.put(('progress', '下载已校验，正在验证新版程序……'))
+                stage='验证新版程序'
                 helper, plan = prepare_update(candidate, expected)
                 self.events.put(('install', (helper, plan)))
             except Exception as exc:
-                self.events.put(('error', str(exc)))
+                self.events.put(('error', f'{stage}失败：{exc}'))
         threading.Thread(target=worker, daemon=True).start()
 
     def poll(self):
@@ -266,7 +269,7 @@ class App:
                 self.updating = False
                 self.update_button.state(['!disabled'])
             if kind == 'error':
-                self.status.set('更新检查失败，下载功能不受影响。')
+                self.status.set('更新未完成，下载功能不受影响。')
                 messagebox.showwarning('检查更新', value)
             elif kind == 'progress':
                 self.status.set(value)

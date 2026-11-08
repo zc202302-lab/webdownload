@@ -1,3 +1,7 @@
+# v1.0.23 独立更新文件通道
+
+更新主通道为raw.githubusercontent.com/本仓库/update-channel/update.json，清单asset_commit固定40位SHA，原图式EXE与SHA256SUMS固定同commit，不使用main可变文件地址。清单保留正式Release地址并验证大小/校验值与本仓库，发布源为Windows已通过自检的相同EXE。旧Release API/网页通道保留备用，文件下载连接故障可回退；校验失败不降级绕过。自动更新仍只替换EXE、自检/启动确认/回滚不变。GUI错误标明查询/下载/验证阶段。publish_update_channel.py仅main CI可执行，工作流凭据不输出，仅发布EXE/校验/manifest至独立update-channel分支；用lease防并发覆盖，不提交用户数据。首次旧版无法自修，需用户手动替换一次新版EXE。发布后必须实测主通道清单及EXE完整下载，不能以只通过模拟测试宣称网络问题解决。
+
 # v1.0.22 已证实跳页偏移
 
 用户diagnostic.json实证：requested_page=12，page_field=14-15/42，image_pages包含12..17及预载/图标。wait_pages(seeking=True)必须等待实际页码和对应图片稳定，再通过previous_arrow/next_arrow真实UI校正到目标；不从缓存/预载列表偷取12/13来假装当前已到达。最多4个不同跨度，重复跨度判无进展/循环；保持普通非seek跳过未保存页仍严格失败。上一页兼容常见ID、实际工具栏语义探测和书页左侧箭头。数字页码框在seek中结合可见跨度支持校正。诊断增加各数值图片ready/visible，不含URL或登录数据。tests/test_books复现上传的14-15/42状态并覆盖超调/不足/无效箭头；实际网站完整书籍仍未复测，不宣称已一次性解决所有阅读器问题。

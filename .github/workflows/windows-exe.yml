@@ -2,7 +2,7 @@ name: Build Windows EXE
 on:
   push:
     branches: [main, feature/windows-exe]
-    paths: ['ebook_collector/**', 'tests/**', 'build_windows.py', '.github/workflows/windows-exe.yml']
+    paths: ['ebook_collector/**', 'tests/**', 'build_windows.py', 'publish_update_channel.py', '.github/workflows/windows-exe.yml']
   workflow_dispatch:
 permissions:
   contents: write
@@ -43,3 +43,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
           }
           exit 0
+      - name: Publish independent update channel
+        if: github.ref == 'refs/heads/main'
+        run: python publish_update_channel.py
