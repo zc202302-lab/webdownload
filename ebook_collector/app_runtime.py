@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-VERSION = '1.0.25'
+VERSION = '1.0.26'
 
 
 def app_root():
