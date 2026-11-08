@@ -6,7 +6,7 @@
 
 关键配方字段或步骤只有“见视频”等占位内容时，不生成PDF，记录“已跳过见视频”，重启默认跳过。完整图文做法只是附带提及视频时仍保留。可选设置recipe_recheck_video=true重新检查跳过项。
 
-可选settings.json：recipe_workers默认3（1–4）；recipe_scan_workers默认2（1–3）；recipe_image_workers默认4（1–8）。建议先保持默认；低内存电脑可降低。不会覆盖原设置文件。多标签页为正常现象，采集时请勿手动操作正在处理的页面。
+可选settings.json：recipe_workers默认5（1–5）；recipe_scan_workers默认2（1–3）；recipe_image_workers默认8（1–8）。建议先保持默认；低内存电脑可降低。不会覆盖原设置文件。多标签页为正常现象，采集时请勿手动操作正在处理的页面。
 
 验证包括离线回归和Windows真实Edge测试页面的并发、原图/PDF及续传检查；实际登录网站的限流及速度仍需本机验证，不保证固定提速倍数。
 

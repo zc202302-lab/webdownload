@@ -13,6 +13,8 @@ assert recipes.video_only({'ingredients':[{'items':[{'name':'见视频','amount'
 assert recipes.video_only({'ingredients':[{'items':[{'name':'盐','amount':'见视频'},{'name':'土豆','amount':'200克'}]}],'sections':[]})
 assert recipes.video_only({'ingredients':[],'sections':[{'heading':'制作步骤','text':'制作步骤\n详见视频'}]})
 assert not recipes.video_only({'ingredients':[{'items':[{'name':'土豆','amount':'200克'}]}],'sections':[{'heading':'制作步骤','text':'制作步骤\n切片煎熟，可见视频演示'}]})
+assert parallel.limits({})==[5,2,8]
+assert parallel.limits({'recipe_workers':5,'recipe_image_workers':8})==[5,2,8]
 assert parallel.list_key(recipes.LIST_URL+'#top')==parallel.list_key(recipes.LIST_URL+'&page=1')
 
 class Context:

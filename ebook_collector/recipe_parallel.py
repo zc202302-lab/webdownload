@@ -19,7 +19,7 @@ from recipe_collector import BODY_SCRIPT, LIST_SCRIPT, LIST_URL, RecipeStore, re
 
 def limits(settings):
     result=[]
-    for key,default,maximum in [('recipe_workers',3,4),('recipe_scan_workers',2,3),('recipe_image_workers',4,8)]:
+    for key,default,maximum in [('recipe_workers',5,5),('recipe_scan_workers',2,3),('recipe_image_workers',8,8)]:
         value=settings.get(key,default)
         if isinstance(value,bool) or not isinstance(value,int) or not 1<=value<=maximum:
             raise ValueError(f'{key}必须为1到{maximum}的整数')

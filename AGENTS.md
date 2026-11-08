@@ -1,3 +1,7 @@
+# v1.0.27 并行配置
+
+用户要求默认菜谱5道、图片8张；扫描仍2页、PDF信号量仍1。基于v1.0.26回退版，仅提高默认值和菜谱上限至5，不恢复v1.0.25自适应逻辑。显式自定义配置继续有效。
+
 # v1.0.24 爆款菜谱并行及见视频跳过
 
 recipe_collector.main转recipe_parallel.main：单事件循环async Playwright复用原持久登录浏览器，不跨线程共享对象、不共享profile并发启动。默认recipe_scan_workers=2、recipe_workers=3、recipe_image_workers=4，PDF信号量1；设置范围分别1..3、1..4、1..8。列表仅使用实际数字分页/下一页链接，canonical去重，菜谱ID全局去重，待处理队列最多2*workers。满足正文/图片稳定2秒即可处理，最长等待60秒；原图请求300秒最多3次。共享原图inflight+32MiB LRU，取消单菜谱不取消其他使用者；保持最高有效原图、完整解码、SHA缓存验证、原子进度、图片嵌入/PDF验证后提交完成。普通单菜谱错误重试一次后记录失败继续；权限401/403/429和StorageFull取消整批待处理任务，已完成资料及进度保留。停止桥接trace包含recipe_parallel。扫描完成与下载完成分别记录，失败不伪装完成；失败记录.txt可核查。
