@@ -38,7 +38,7 @@ async def check():
      scan_active+=1;scan_peak=max(scan_peak,scan_active)
      try:
       await asyncio.sleep(.1)
-      number=int(query.get('page',['1'])[0]);ids={1:[1,2],2:[2,3],3:[4]}[number]
+      number=int(query.get('page',['1'])[0]);ids={1:[1,2],2:[2,3],3:[4,5]}[number]
       body='<div class="cookbook-list">'+''.join(f'<div class="cookbook-item"><a href="?action=cookbook_detail&id={i}"><span class="cookbook-name">Recipe {i}</span></a></div>' for i in ids)+'</div>'
       body+='<div class="pagination">'+''.join(f'<a href="?action=cookbook_list&page={i}" class="'+('active' if i==number else '')+f'">{i}</a>' for i in [1,2,3])+'</div>'
       await handler.fulfill(status=200,body=body,content_type='text/html; charset=utf-8')
@@ -48,7 +48,10 @@ async def check():
      ingredient='见视频' if number==4 else '土豆'
      amount='见视频' if number==4 else '200克'
      steps='见视频' if number==4 else '切片，然后煎熟。'
+     if number==5:steps='详细制作步骤请查看专题内容'
      body=f'<div class="container"><div class="page-header"><h1 class="cookbook-title">Recipe {number}</h1></div><div class="images-gallery"><img src="{preview_uri}" data-original="http://127.0.0.1:{server.server_port}/original.jpg"></div><div class="section"><h3 class="section-title">食材准备</h3><div class="food-category"><h4>主料</h4><ul class="food-list"><li><span>{ingredient}</span><span>{amount}</span></li></ul></div></div><div class="section"><h3 class="section-title">制作步骤</h3><div class="steps"><p>{steps}</p></div></div></div>'
+     if number==5:
+      body='<div class="container"><div class="page-header"><h1 class="cookbook-title">Recipe 5</h1></div><div class="section"><h3 class="section-title">食材准备</h3><p>详细食材清单请查看专题内容</p></div><div class="section"><h3 class="section-title">制作步骤</h3><p>详细制作步骤请查看专题内容</p></div></div>'
      await handler.fulfill(status=200,body=body,content_type='text/html; charset=utf-8')
    await context.route('https://www.easteat.com/book_list.php**',route)
    original=p.collect
@@ -58,10 +61,11 @@ async def check():
     try:return await original(*args)
     finally:active-=1
    with patch.object(p,'collect',side_effect=observed):await p.pipeline(context,store,{})
-   assert 1<peak<=3 and scan_peak==2
-   assert sorted(detail_calls)==[1,2,3,4] and requests.count('/original.jpg')==1
+   assert 1<peak<=5 and scan_peak==2
+   assert sorted(detail_calls)==[1,2,3,4,5] and requests.count('/original.jpg')==1
    assert store.db['scan_complete'] and store.db['download_complete']
    assert store.db['recipes']['4']['status']=='已跳过见视频'
+   assert store.db['recipes']['5']['status']=='已跳过专题内容'
    assert len(list((store.root/'菜谱').glob('*.pdf')))==3
    for number in (1,2,3):
     entry={'title':f'Recipe {number}','source':r.LIST_URL.replace('cookbook_list','cookbook_detail')+f'&id={number}'}

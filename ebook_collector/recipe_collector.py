@@ -97,6 +97,13 @@ def list_snapshot(page):
 def body_snapshot(page):
     return page.evaluate(BODY_SCRIPT)
 
+def topic_content(snapshot):
+    # Only inspect extracted article sections/ingredients, never navigation or recommendations.
+    values=[section.get('text','') for section in snapshot.get('sections',[])]
+    values += [str(row.get(key,'')) for group in snapshot.get('ingredients',[]) for row in group.get('items',[]) for key in ('name','amount')]
+    return any('专题内容' in re.sub(r'\s+','',text) for text in values)
+
+
 def video_only(snapshot):
     def prompt(text):
         text=re.sub(r'[\s，。:：、!！;；]+','',text or '')
@@ -118,7 +125,7 @@ def wait_body(page, settings):
         snapshot = body_snapshot(page)
         if snapshot and snapshot['locked']:
             raise PermissionError('菜谱正文已锁定，请自行登录并确认有完整阅读权限后重新运行。')
-        ready = (snapshot and (video_only(snapshot) or (snapshot['has_steps'] and snapshot['sources']
+        ready = (snapshot and (topic_content(snapshot) or video_only(snapshot) or (snapshot['has_steps'] and snapshot['sources']
                  and all(im['ready'] for im in snapshot['sources']))))
         if ready:
             signature = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
@@ -186,6 +193,9 @@ class RecipeStore:
 def collect_recipe(context, page, item, store, settings):
     identifier = recipe_id(item['source'])
     snapshot = wait_body(page, settings)
+    if topic_content(snapshot):
+        store.update(item,'已跳过专题内容',reason='正文包含专题内容提示；按设置跳过，未生成PDF。')
+        return
     if video_only(snapshot):
         store.update(item,'已跳过见视频',reason='配方或步骤仅提示见视频，未生成PDF。')
         return

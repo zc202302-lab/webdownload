@@ -14,7 +14,7 @@ from playwright.async_api import async_playwright, Error as PlaywrightError
 from chapter_reader import body_document
 from collector import ROOT, verified
 from library_manager import StorageFull, file_hash, read_settings, save_json, validate_pdf
-from recipe_collector import BODY_SCRIPT, LIST_SCRIPT, LIST_URL, RecipeStore, recipe_id, video_only
+from recipe_collector import BODY_SCRIPT, LIST_SCRIPT, LIST_URL, RecipeStore, recipe_id, video_only, topic_content
 
 
 def limits(settings):
@@ -57,7 +57,7 @@ async def wait_body(page,settings):
     while time.monotonic()<deadline:
         snapshot=await page.evaluate(BODY_SCRIPT)
         if snapshot and snapshot['locked']:raise PermissionError('菜谱正文锁定，请确认完整阅读权限，整批暂停。')
-        ready=snapshot and (video_only(snapshot) or (snapshot['has_steps'] and snapshot['sources'] and all(im['ready'] for im in snapshot['sources'])))
+        ready=snapshot and (topic_content(snapshot) or video_only(snapshot) or (snapshot['has_steps'] and snapshot['sources'] and all(im['ready'] for im in snapshot['sources'])))
         if ready:
             signature=json.dumps(snapshot,ensure_ascii=False,sort_keys=True)
             if signature!=previous:previous,stable=signature,time.monotonic()
@@ -141,6 +141,9 @@ async def export_pdf(context,snapshot,mapping,path):
 
 async def collect(context,page,item,store,settings,pool,pdf_semaphore):
     snapshot=await wait_body(page,settings)
+    if topic_content(snapshot):
+        store.update(item,'已跳过专题内容',reason='正文包含专题内容提示；按设置跳过，未生成PDF。')
+        print(f'跳过专题内容：{item["title"]}');return
     if video_only(snapshot):
         store.update(item,'已跳过见视频',reason='正文仅提示见视频，无实际配方或步骤；未生成PDF。')
         print(f'跳过见视频：{item["title"]}');return
@@ -215,6 +218,7 @@ async def pipeline(context,store,settings):
                         if identifier in seen:continue
                         seen.add(identifier)
                         if store.done(item):continue
+                        if store.db['recipes'].get(identifier,{}).get('status')=='已跳过专题内容':continue
                         if store.db['recipes'].get(identifier,{}).get('status')=='已跳过见视频' and not settings.get('recipe_recheck_video',False):continue
                         await queue.put(item)
             store.db['scan_complete']=True;store.flush()
