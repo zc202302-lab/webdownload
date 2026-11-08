@@ -157,7 +157,7 @@ def run_worker(mode,port,token,test=False):
             try: return answers.get(timeout=0.1)
             except queue.Empty: pass
         raise KeyboardInterrupt
-    owned={'collector','chapter_reader','recipe_collector','book_collector','library_manager','missing_records'}
+    owned={'collector','chapter_reader','recipe_collector','recipe_parallel','book_collector','library_manager','missing_records'}
     def trace(frame,event,arg):
         # Never interrupt Playwright/asyncio internals or checkpoint writes.
         if frame.f_globals.get('__name__') not in owned:

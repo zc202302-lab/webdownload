@@ -1,6 +1,7 @@
 """Download accessible cookbook pages using the user's existing browser profile."""
 import html
 import json
+import re
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -24,17 +25,15 @@ def recipe_id(url):
     return identifier
 
 
-def list_snapshot(page):
-    return page.evaluate(r'''() => ({
+LIST_SCRIPT = r'''() => ({
       items:[...document.querySelectorAll('.cookbook-list .cookbook-item a')].map(a=>({
         source:a.href,title:a.querySelector('.cookbook-name')?.textContent.trim() || ''})),
       current:document.querySelector('.pagination a.active')?.textContent.trim() || '1',
+      links:[...document.querySelectorAll('.pagination a[href]')].filter(a=>/^\d+$/.test(a.textContent.trim())).map(a=>a.href),
       next:[...document.querySelectorAll('.pagination a')].find(a=>a.textContent.trim()==='下一页')?.href || null
-    })''')
+    })'''
 
-
-def body_snapshot(page):
-    return page.evaluate(r'''() => {
+BODY_SCRIPT = r'''() => {
       const title=document.querySelector('.cookbook-title');
       if(!title) return null;
       const root=title.closest('.page-header')?.parentElement;
@@ -89,7 +88,26 @@ def body_snapshot(page):
       const stepText=stepSection ? stepSection.innerText.replace('制作步骤','').trim() : '';
       return {title:title.textContent.trim(),locked,sections:sectionData,ingredients:foods,
         has_steps:!!stepText && !locked,html:selected.map(clean).join('\n'),sources};
-    }''')
+    }'''
+
+def list_snapshot(page):
+    return page.evaluate(LIST_SCRIPT)
+
+
+def body_snapshot(page):
+    return page.evaluate(BODY_SCRIPT)
+
+def video_only(snapshot):
+    def prompt(text):
+        text=re.sub(r'[\s，。:：、!！;；]+','',text or '')
+        return bool(re.fullmatch(r'(?:详见|参见|请看|请观看|观看|见|看)?视频(?:教程|演示|讲解)?',text))
+    ingredients=[str(row.get(key,'')).strip() for group in snapshot.get('ingredients',[]) for row in group.get('items',[]) for key in ('name','amount') if str(row.get(key,'')).strip()]
+    if ingredients and any(prompt(value) for value in ingredients):return True
+    for section in snapshot.get('sections',[]):
+        if '步骤' in section.get('heading',''):
+            content=section.get('text','').replace(section['heading'],'').strip()
+            if prompt(content):return True
+    return False
 
 
 def wait_body(page, settings):
@@ -100,8 +118,8 @@ def wait_body(page, settings):
         snapshot = body_snapshot(page)
         if snapshot and snapshot['locked']:
             raise PermissionError('菜谱正文已锁定，请自行登录并确认有完整阅读权限后重新运行。')
-        ready = (snapshot and snapshot['has_steps'] and snapshot['sources']
-                 and all(im['ready'] for im in snapshot['sources']))
+        ready = (snapshot and (video_only(snapshot) or (snapshot['has_steps'] and snapshot['sources']
+                 and all(im['ready'] for im in snapshot['sources']))))
         if ready:
             signature = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
             if signature != previous:
@@ -131,6 +149,7 @@ class RecipeStore:
         if record.get('status') != '已完成':
             return False
         for key in ('pdf', 'data'):
+            if not record.get(key):return False
             path = self.root / record[key]
             if not path.is_file() or file_hash(path) != record[key + '_sha256']:
                 return False
@@ -149,6 +168,11 @@ class RecipeStore:
                 from urllib.parse import quote
                 title = f'<a href="{quote(r["pdf"], safe="/")}">{title}</a>'
             rows.append(f'<tr><td>{identifier}</td><td>{title}</td><td>{html.escape(r["status"])}</td><td>{html.escape(r.get("reason", ""))}</td></tr>')
+        failed=[r for r in self.db['recipes'].values() if r['status'] in ('下载失败待重试','未完成已暂停','未完成已终止')]
+        report='\n\n'.join(f'菜名：{r["title"]}\n链接：{r["source"]}\n状态：{r["status"]}\n原因：{r.get("reason","")}' for r in failed)
+        temporary_report=self.root/'失败记录.tmp'
+        temporary_report.write_text(report or '暂无失败记录。',encoding='utf-8-sig')
+        temporary_report.replace(self.root/'失败记录.txt')
         markup = ('<!doctype html><meta charset="utf-8"><title>爆款菜谱资料库</title>'
                   '<style>body{font-family:system-ui;margin:32px}td,th{padding:12px;text-align:left;border-bottom:1px solid #ddd}table{width:100%}input{padding:10px;width:70%}</style>'
                   '<h1>爆款菜谱资料库</h1><input placeholder="搜索菜名、编号或状态" oninput="document.querySelectorAll(\'tbody tr\').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(this.value.toLowerCase()))">'
@@ -162,6 +186,9 @@ class RecipeStore:
 def collect_recipe(context, page, item, store, settings):
     identifier = recipe_id(item['source'])
     snapshot = wait_body(page, settings)
+    if video_only(snapshot):
+        store.update(item,'已跳过见视频',reason='配方或步骤仅提示见视频，未生成PDF。')
+        return
     pdf, data_path = store.paths(item)
     pdf.parent.mkdir(parents=True, exist_ok=True)
     work = store.root / '_work' / identifier
@@ -252,22 +279,8 @@ def batch_recipes(context, list_page, store, settings):
 
 
 def main():
-    settings = read_settings(ROOT)
-    store = RecipeStore(settings['output_path'], settings['reserve_gb'])
-    store.storage.check_space()
-    with sync_playwright() as playwright:
-        context = launch_browser(playwright)
-        try:
-            page = context.new_page()
-            page.goto(LIST_URL, wait_until='domcontentloaded')
-            input('请自行登录并确认菜谱有完整阅读权限，然后回到此窗口按回车：')
-            # Start at page one to avoid missing items shifted by new publications.
-            # Completed recipe IDs are checked and skipped on each run.
-            page.goto(LIST_URL, wait_until='domcontentloaded')
-            batch_recipes(context, page, store, settings)
-            print(f'完成。打开：{store.root / "菜谱目录.html"}')
-        finally:
-            context.close()
+    from recipe_parallel import main as parallel_main
+    parallel_main()
 
 
 if __name__ == '__main__':

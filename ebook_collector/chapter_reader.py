@@ -308,19 +308,23 @@ def download_best(context, item, referer, temporary, library):
     return best[0], best[2]
 
 
-def print_body(context, snapshot, mapping, path):
+def body_document(snapshot, mapping):
     markup=snapshot['html']
     for source,image_path in mapping.items():
         with Image.open(image_path) as im:
             mime=Image.MIME[im.format]
         embedded='data:'+mime+';base64,'+base64.b64encode(image_path.read_bytes()).decode()
         markup=markup.replace('src="'+html.escape(source,quote=True)+'"','src="'+embedded+'"')
+    return '<!doctype html><meta charset="utf-8"><style>body{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-size:16px;line-height:1.7;color:#111}img{max-width:100%;max-height:250mm;object-fit:contain;width:auto;height:auto;display:block;margin:12px auto;break-inside:avoid}p,table{overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}td,th{border:1px solid #aaa;padding:5px}*{overflow:visible!important}</style><main>'+markup+'</main>'
+
+
+def print_body(context, snapshot, mapping, path):
     page=context.new_page()
     try:
         # The export document contains only cloned body content and embedded images.
         page.route('http://**/*',lambda route:route.abort())
         page.route('https://**/*',lambda route:route.abort())
-        page.set_content('<!doctype html><meta charset="utf-8"><style>body{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-size:16px;line-height:1.7;color:#111}img{max-width:100%;max-height:250mm;object-fit:contain;width:auto;height:auto;display:block;margin:12px auto;break-inside:avoid}p,table{overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}td,th{border:1px solid #aaa;padding:5px}*{overflow:visible!important}</style><main>'+markup+'</main>',wait_until='load')
+        page.set_content(body_document(snapshot,mapping),wait_until='load')
         page.evaluate('async()=>{await document.fonts.ready;await Promise.all([...document.images].map(im=>im.decode()));}')
         count=page.locator('img').count()
         embedded=page.locator('img').evaluate_all('es=>es.every(e=>e.src.startsWith("data:") && e.complete && e.naturalWidth>0)')

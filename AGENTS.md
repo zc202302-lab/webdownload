@@ -1,3 +1,11 @@
+# v1.0.24 爆款菜谱并行及见视频跳过
+
+recipe_collector.main转recipe_parallel.main：单事件循环async Playwright复用原持久登录浏览器，不跨线程共享对象、不共享profile并发启动。默认recipe_scan_workers=2、recipe_workers=3、recipe_image_workers=4，PDF信号量1；设置范围分别1..3、1..4、1..8。列表仅使用实际数字分页/下一页链接，canonical去重，菜谱ID全局去重，待处理队列最多2*workers。满足正文/图片稳定2秒即可处理，最长等待60秒；原图请求300秒最多3次。共享原图inflight+32MiB LRU，取消单菜谱不取消其他使用者；保持最高有效原图、完整解码、SHA缓存验证、原子进度、图片嵌入/PDF验证后提交完成。普通单菜谱错误重试一次后记录失败继续；权限401/403/429和StorageFull取消整批待处理任务，已完成资料及进度保留。停止桥接trace包含recipe_parallel。扫描完成与下载完成分别记录，失败不伪装完成；失败记录.txt可核查。
+
+用户新增见视频跳过：video_only仅检查关键配方字段和制作步骤的完整视频占位提示；任何关键食材字段仅为见视频/详见视频等，或整个步骤仅视频提示，跳过不输出PDF，记录已跳过见视频。正文实际配方/步骤完整且只是附带提及视频仍保留。跳过状态默认重启不重复打开；recipe_recheck_video=true可复查。权限锁定先于跳过判断。
+
+tests/test_recipe_parallel.py覆盖并发上限、多页ID去重、普通失败重试/报告/续传、权限/磁盘异常取消、共享图片及取消隔离。Windows CI用真实Edge执行test_recipe_parallel_browser.py，三列表页/四菜谱fixture验证重叠、唯一原图请求、最高分辨率、真实PDF/JSON校验、视频跳过、重启不重下；不等于登录网站实测。
+
 # v1.0.23 独立更新文件通道
 
 更新主通道为raw.githubusercontent.com/本仓库/update-channel/update.json，清单asset_commit固定40位SHA，原图式EXE与SHA256SUMS固定同commit，不使用main可变文件地址。清单保留正式Release地址并验证大小/校验值与本仓库，发布源为Windows已通过自检的相同EXE。旧Release API/网页通道保留备用，文件下载连接故障可回退；校验失败不降级绕过。自动更新仍只替换EXE、自检/启动确认/回滚不变。GUI错误标明查询/下载/验证阶段。publish_update_channel.py仅main CI可执行，工作流凭据不输出，仅发布EXE/校验/manifest至独立update-channel分支；用lease防并发覆盖，不提交用户数据。首次旧版无法自修，需用户手动替换一次新版EXE。发布后必须实测主通道清单及EXE完整下载，不能以只通过模拟测试宣称网络问题解决。
