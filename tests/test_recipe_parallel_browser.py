@@ -1,5 +1,6 @@
 """Real Chromium fixture: concurrent list/detail tabs, original-image dedupe and PDFs."""
 import asyncio
+import base64
 import io
 import json
 import hashlib
@@ -17,7 +18,7 @@ import recipe_parallel as p
 import recipe_collector as r
 
 buf=io.BytesIO();Image.new('RGB',(160,240),'#d9e8f0').save(buf,format='JPEG');image=buf.getvalue()
-preview_buf=io.BytesIO();Image.new('RGB',(80,120),'#d9e8f0').save(preview_buf,format='JPEG');preview=preview_buf.getvalue()
+preview_buf=io.BytesIO();Image.new('RGB',(80,120),'#d9e8f0').save(preview_buf,format='JPEG');preview=preview_buf.getvalue();preview_uri='data:image/jpeg;base64,'+base64.b64encode(preview).decode()
 requests=[]
 class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
@@ -47,7 +48,7 @@ async def check():
      ingredient='见视频' if number==4 else '土豆'
      amount='见视频' if number==4 else '200克'
      steps='见视频' if number==4 else '切片，然后煎熟。'
-     body=f'<div class="container"><div class="page-header"><h1 class="cookbook-title">Recipe {number}</h1></div><div class="images-gallery"><img src="http://127.0.0.1:{server.server_port}/preview.jpg" data-original="http://127.0.0.1:{server.server_port}/original.jpg"></div><div class="section"><h3 class="section-title">食材准备</h3><div class="food-category"><h4>主料</h4><ul class="food-list"><li><span>{ingredient}</span><span>{amount}</span></li></ul></div></div><div class="section"><h3 class="section-title">制作步骤</h3><div class="steps"><p>{steps}</p></div></div></div>'
+     body=f'<div class="container"><div class="page-header"><h1 class="cookbook-title">Recipe {number}</h1></div><div class="images-gallery"><img src="{preview_uri}" data-original="http://127.0.0.1:{server.server_port}/original.jpg"></div><div class="section"><h3 class="section-title">食材准备</h3><div class="food-category"><h4>主料</h4><ul class="food-list"><li><span>{ingredient}</span><span>{amount}</span></li></ul></div></div><div class="section"><h3 class="section-title">制作步骤</h3><div class="steps"><p>{steps}</p></div></div></div>'
      await handler.fulfill(status=200,body=body,content_type='text/html; charset=utf-8')
    await context.route('https://www.easteat.com/book_list.php**',route)
    original=p.collect
@@ -74,5 +75,5 @@ async def check():
    assert detail_calls==previous and requests.count('/original.jpg')==1
    await context.close();await browser.close()
  print('PASS: real browser multi-page overlap, 3-recipe bound, one original-image request, complete PDF/data validation, video skip and restart without duplicate downloads')
-try:asyncio.run(check())
+try:asyncio.run(asyncio.wait_for(check(),timeout=120))
 finally:server.shutdown();server.server_close()

@@ -24,6 +24,7 @@ jobs:
       - name: Offline regression tests
         run: python tests/run_tests.py
       - name: Real browser recipe pipeline integration
+        timeout-minutes: 3
         run: python tests/test_recipe_parallel_browser.py
       - name: Build and smoke-test executable
         run: python build_windows.py
