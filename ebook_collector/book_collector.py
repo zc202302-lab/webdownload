@@ -231,6 +231,8 @@ def wait_pages(frame, expected, total, settings, work, seeking=False):
     deadline = time.monotonic() + max(60, float(settings.get('chapter_wait_seconds', 60)))
     previous, stable = None, None
     snapshot = {}
+    correction_position, correction_since = None, None
+    corrected_positions=set()
     while time.monotonic() < deadline:
         value = frame.locator('#currentPageIndexTextField').input_value()
         pages = displayed_pages(value, total)
@@ -241,8 +243,9 @@ def wait_pages(frame, expected, total, settings, work, seeking=False):
             # preloaded and hidden images cannot establish a displayed spread.
             images=[im for im in images if im.get('visible')]
             visible_pages=sorted({n for im in images if (n:=page_number(im['src'])) is not None and 1<=n<=total})
-            if (pages[0] in visible_pages and 1<=len(visible_pages)<=2
-                    and visible_pages[-1]-visible_pages[0]==len(visible_pages)-1):
+            if (1<=len(visible_pages)<=2
+                    and visible_pages[-1]-visible_pages[0]==len(visible_pages)-1
+                    and (pages[0] in visible_pages or seeking)):
                 pages=visible_pages
             else:
                 previous,stable=None,None
@@ -252,7 +255,31 @@ def wait_pages(frame, expected, total, settings, work, seeking=False):
         # from arbitrary preload images or the printed folio on the paper.
         selected = {n: [im for im in images if page_number(im['src']) == n] for n in pages}
         snapshot = {'page_field': value, 'requested_page': expected,
-                    'image_pages': [page_number(im['src']) for im in images]}
+                    'image_pages': [page_number(im['src']) for im in images],
+                    'image_states':[{'page':page_number(im['src']),'ready':bool(im.get('ready')),'visible':bool(im.get('visible'))} for im in images if page_number(im['src']) is not None]}
+        if seeking and expected not in pages:
+            # A seek can land on a neighbouring spread (actual field 14-15/42
+            # for requested page 12). Wait for a stable, loaded actual spread,
+            # then correct with genuine UI arrows rather than accepting preloads.
+            actual=tuple(pages)
+            loaded=all(selected[n] and all(im['ready'] for im in selected[n]) for n in pages)
+            if not loaded or correction_position!=actual:
+                correction_position,correction_since=actual,time.monotonic()
+            elif time.monotonic()-correction_since>=2:
+                if actual in corrected_positions or len(corrected_positions)>=4:
+                    snapshot['reason']='跳页校正无进展或往返循环'
+                    save_json(work/'diagnostic.json',snapshot)
+                    raise RuntimeError(f'跳页校正无法到达第{expected}页，当前{value}，已保留进度。')
+                corrected_positions.add(actual)
+                snapshot['reason']='跳页偏离目标，使用真实箭头校正'
+                save_json(work/'diagnostic.json',snapshot)
+                print(f'跳页实际到达{value}，正在校正到第{expected}页……')
+                if pages[0]>expected:previous_arrow(frame,work)
+                else:next_arrow(frame,work)
+                correction_position,correction_since=None,None
+            previous,stable=None,None
+            frame.wait_for_timeout(250)
+            continue
         if pages[0] > expected and not seeking:
             save_json(work / 'diagnostic.json', snapshot)
             raise RuntimeError(f'翻页跳过了尚未保存的第{expected}页，已停止并保留进度。')
@@ -361,6 +388,7 @@ SIDE_ARROW_PROBE = r'''es => {
 
 
 PREVIOUS_SIDE_PROBE = SIDE_ARROW_PROBE.replace('const backwards=false;', 'const backwards=true;')
+PREVIOUS_TOOLBAR_PROBE = ARROW_PROBE.replace('next','previous').replace('right','left').replace('下一页','上一页').replace('下一章','上一章')
 
 
 def next_arrow(frame, work=None):
@@ -395,6 +423,28 @@ def next_arrow(frame, work=None):
         save_json(work / 'navigation_diagnostic.json', {'reason':'下一页箭头未唯一识别',
                    'candidates':candidates,'side_candidates':side_candidates})
     raise RuntimeError('无法唯一识别阅读器下一页箭头，已停止；请提供阅读器页面结构以便适配。')
+
+
+def previous_arrow(frame, work=None):
+    selectors=('#previousPageButton','#prevPageButton','#previousPage','#prevPage',
+               '#previous','#prev','#btnPrev','#leftButton','#leftPage','#leftBtn',
+               '[title="Previous Page"]','[title="上一页"]','[aria-label="上一页"]')
+    for selector in selectors:
+        buttons=frame.locator(selector)
+        visible=[buttons.nth(i) for i in range(buttons.count()) if buttons.nth(i).is_visible()]
+        if len(visible)==1:
+            visible[0].click(timeout=10000)
+            return
+    nodes=frame.locator(ARROW_NODES)
+    rows=nodes.evaluate_all(PREVIOUS_TOOLBAR_PROBE) if nodes.count() else []
+    if not rows and nodes.count():
+        rows=nodes.evaluate_all(PREVIOUS_SIDE_PROBE)
+    if len(rows)==1:
+        nodes.nth(rows[0]['index']).click(timeout=10000)
+        return
+    if work is not None:
+        save_json(work/'navigation_diagnostic.json',{'reason':'上一页箭头未唯一识别','candidates':rows})
+    raise RuntimeError('无法唯一识别上一页箭头，已保留进度。')
 
 
 def seek_page(frame, expected, total, settings, work):

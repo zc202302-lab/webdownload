@@ -135,3 +135,8 @@ for initial,target,backwards in [('5-6/8',2,True),('1-2/8',7,False)]:
   assert wait.call_count==1 and advance.call_count==(0 if backwards else 1)
  field.fill.assert_not_called()
 print('PASS: hidden toolbar resume uses verified left/right navigation')
+
+previous_script=side_script[:side_script.index('const right=node')]
+previous_script=previous_script.replace('const probe='+books.SIDE_ARROW_PROBE,'const probe='+books.PREVIOUS_TOOLBAR_PROBE)
+previous_script+="const field=node({id:'currentPageIndexTextField'});document.querySelector=()=>field;const prev=node({class:'button left',text:'上一页'});assert.deepStrictEqual(probe([field,prev]).map(x=>x.index),[1]);"
+subprocess.run(['node','-e',previous_script],check=True)

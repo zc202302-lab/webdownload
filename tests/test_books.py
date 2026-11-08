@@ -297,3 +297,24 @@ assert books.displayed_pages('12',42)==[12]
 for invalid in ('0','43'):
  expect_failure(lambda:books.displayed_pages(invalid,42),'页码范围')
 print('PASS: bare numeric seek fields, verified visible single/double spread, hidden preload rejection and bounds')
+
+# Reproduce the supplied diagnostic: request12, actual14-15/42, DOM preloads12..17.
+for starting in (14,10):
+ clock=Clock();frame=MagicMock();state={'current':starting};actions=[]
+ frame.locator.return_value.input_value.side_effect=lambda:f'{state["current"]}-{state["current"]+1}/42'
+ frame.wait_for_timeout.side_effect=clock.wait
+ def adjacent_images(f):
+  return [dict(src=f'https://reader.test/{n}.jpg',ready=True,visible=n in (state['current'],state['current']+1)) for n in range(10,18)]
+ def backward(*args):actions.append('previous');state['current']-=2
+ def forward(*args):actions.append('next');state['current']+=2
+ with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'reader_images',side_effect=adjacent_images),patch.object(books,'previous_arrow',side_effect=backward),patch.object(books,'next_arrow',side_effect=forward):
+  pages,selected=books.wait_pages(frame,12,42,SETTINGS,work,seeking=True)
+  assert pages==[12,13] and sorted(selected)==[12,13]
+  assert actions==(['previous'] if starting==14 else ['next'])
+# An ineffective correction must fail explicitly, never accept cached 12/13 as current.
+clock=Clock();frame=MagicMock();frame.locator.return_value.input_value.return_value='14-15/42';frame.wait_for_timeout.side_effect=clock.wait
+images=[dict(src=f'https://reader.test/{n}.jpg',ready=True,visible=n in (14,15)) for n in range(12,18)]
+with patch.object(books.time,'monotonic',clock.monotonic),patch.object(books,'reader_images',return_value=images),patch.object(books,'previous_arrow') as previous:
+ expect_failure(lambda:books.wait_pages(frame,12,42,SETTINGS,work,seeking=True),'校正无法到达')
+ assert previous.call_count==1
+print('PASS: supplied 14-15/42 diagnostic reproduced, over/undershoot corrected with real navigation, preloads never accepted and ineffective arrow stops')
