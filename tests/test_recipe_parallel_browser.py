@@ -1,6 +1,7 @@
 """Real Chromium fixture: concurrent list/detail tabs, original-image dedupe and PDFs."""
 import asyncio
 import base64
+from pypdf import PdfReader
 import io
 import json
 import hashlib
@@ -19,10 +20,18 @@ import recipe_collector as r
 
 buf=io.BytesIO();Image.new('RGB',(160,240),'#d9e8f0').save(buf,format='JPEG');image=buf.getvalue()
 preview_buf=io.BytesIO();Image.new('RGB',(80,120),'#d9e8f0').save(preview_buf,format='JPEG');preview=preview_buf.getvalue();preview_uri='data:image/jpeg;base64,'+base64.b64encode(preview).decode()
+colors={1:(220,40,40),2:(30,180,60),3:(30,70,220),4:(220,180,30)}
+images={}
+for number,color in colors.items():
+ encoded=io.BytesIO();Image.new('RGB',(160,240),color).save(encoded,format='JPEG');images[number]=encoded.getvalue()
+served=[]
 requests=[]
 class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
-  requests.append(self.path);self.send_response(200);self.send_header('Content-Type','image/jpeg');self.end_headers();self.wfile.write(image if self.path=='/original.jpg' else preview)
+  requests.append(self.path)
+  number=int(parse_qs(urlparse(self.headers.get('Referer','')).query).get('id',['1'])[0])
+  served.append(number)
+  self.send_response(200);self.send_header('Content-Type','image/jpeg');self.end_headers();self.wfile.write(images[number] if self.path=='/original.jpg' else preview)
  def log_message(self,*args):pass
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
 async def check():
@@ -40,14 +49,14 @@ async def check():
       await asyncio.sleep(.1)
       number=int(query.get('page',['1'])[0]);ids={1:[1,2],2:[2,3],3:[4]}[number]
       body='<div class="cookbook-list">'+''.join(f'<div class="cookbook-item"><a href="?action=cookbook_detail&id={i}"><span class="cookbook-name">Recipe {i}</span></a></div>' for i in ids)+'</div>'
-      body+='<div class="pagination">'+''.join(f'<a href="?action=cookbook_list&page={i}" class="'+('active' if i==number else '')+f'">{i}</a>' for i in [1,2,3])+'</div>'
+      body+='<div class="pagination"><a href="?action=cookbook_list&page=3">末页</a>'+''.join(f'<a href="?action=cookbook_list&page={i}" class="'+('active' if i==number else '')+f'">{i}</a>' for i in [1,2,3])+'</div>'
       await handler.fulfill(status=200,body=body,content_type='text/html; charset=utf-8')
      finally:scan_active-=1
     else:
      number=int(query['id'][0]);detail_calls.append(number)
      ingredient='见视频' if number==4 else '土豆'
-     amount='见视频' if number==4 else '200克'
-     steps='见视频' if number==4 else '切片，然后煎熟。'
+     amount='见视频' if number==4 else f'{number*100}克'
+     steps='见视频' if number==4 else f'Content for recipe {number}: 切片，然后煎熟。'
      body=f'<div class="container"><div class="page-header"><h1 class="cookbook-title">Recipe {number}</h1></div><div class="images-gallery"><img src="{preview_uri}" data-original="http://127.0.0.1:{server.server_port}/original.jpg"></div><div class="section"><h3 class="section-title">食材准备</h3><div class="food-category"><h4>主料</h4><ul class="food-list"><li><span>{ingredient}</span><span>{amount}</span></li></ul></div></div><div class="section"><h3 class="section-title">制作步骤</h3><div class="steps"><p>{steps}</p></div></div></div>'
      await handler.fulfill(status=200,body=body,content_type='text/html; charset=utf-8')
    await context.route('https://www.easteat.com/book_list.php**',route)
@@ -58,8 +67,8 @@ async def check():
     try:return await original(*args)
     finally:active-=1
    with patch.object(p,'collect',side_effect=observed):await p.pipeline(context,store,{})
-   assert 1<peak<=3 and scan_peak==2
-   assert sorted(detail_calls)==[1,2,3,4] and requests.count('/original.jpg')==1
+   assert 1<peak<=5 and scan_peak==2
+   assert sorted(detail_calls)==[1,2,3,4] and requests.count('/original.jpg')==3 and sorted(served)==[1,2,3]
    assert store.db['scan_complete'] and store.db['download_complete']
    assert store.db['recipes']['4']['status']=='已跳过见视频'
    assert len(list((store.root/'菜谱').glob('*.pdf')))==3
@@ -69,11 +78,21 @@ async def check():
     _,data_path=store.paths(entry)
     data=json.loads(data_path.read_text(encoding='utf-8'))
     assert data['images'][0]['size']==[160,240]
-    assert data['images'][0]['sha256']==hashlib.sha256(image).hexdigest()
-    assert data['ingredients'][0]['items'][0]['amount']=='200克'
+    assert data['images'][0]['sha256']==hashlib.sha256(images[number]).hexdigest()
+    assert data['ingredients'][0]['items'][0]['amount']==f'{number*100}克'
+    assert data['images'][0]['recipe_id']==str(number)
+    pdf,_=store.paths(entry)
+    reader=PdfReader(pdf)
+    text=' '.join(page.extract_text() or '' for page in reader.pages)
+    assert f'Recipe {number}' in text and f'Content for recipe {number}' in text
+    assert all(f'Recipe {other}' not in text for other in (1,2,3) if other!=number)
+    embedded=[im.image for page in reader.pages for im in page.images if im.image.width>=100]
+    assert embedded
+    rgb=embedded[0].convert('RGB').getpixel((embedded[0].width//2,embedded[0].height//2))
+    assert max(abs(a-b) for a,b in zip(rgb,colors[number]))<12, (number,rgb)
    previous=list(detail_calls);await p.pipeline(context,store,{})
-   assert detail_calls==previous and requests.count('/original.jpg')==1
+   assert detail_calls==previous and requests.count('/original.jpg')==3 and sorted(served)==[1,2,3]
    await context.close();await browser.close()
- print('PASS: real browser multi-page overlap, 3-recipe bound, one original-image request, complete PDF/data validation, video skip and restart without duplicate downloads')
+ print('PASS: real browser multi-page overlap, adaptive recipe bound, per-recipe image isolation, complete PDF/data validation, video skip and restart without duplicate downloads')
 try:asyncio.run(asyncio.wait_for(check(),timeout=120))
 finally:server.shutdown();server.server_close()

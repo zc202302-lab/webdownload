@@ -8,8 +8,9 @@
   "chapter_wait_seconds": 60,
   "chapter_min_short_edge": 1000,
   "chapter_min_long_edge": 1400,
-  "recipe_workers": 3,
+  "recipe_workers": 5,
   "recipe_scan_workers": 2,
-  "recipe_image_workers": 4,
-  "recipe_recheck_video": false
+  "recipe_image_workers": 8,
+  "recipe_recheck_video": false,
+  "recipe_adaptive": true
 }

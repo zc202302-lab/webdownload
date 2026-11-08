@@ -82,5 +82,30 @@ async def checks():
    await asyncio.gather(first,return_exceptions=True)
    assert await other and len(downloads)==1
 
+ # Identical URLs with different recipe referrers must not share bytes.
+ pool=parallel.ImagePool(None,store.storage,8)
+ async def referer_image(key,referer):return ((10,20),referer.encode(),key[0])
+ with patch.object(pool,'download',side_effect=referer_image) as download:
+  first,second=await asyncio.gather(pool.fetch({'sources':[],'src':'https://image.test/same.jpg'},'recipe1'),pool.fetch({'sources':[],'src':'https://image.test/same.jpg'},'recipe2'))
+ assert first[1]!=second[1] and download.call_count==2
+ # Healthy completion ramps to 5/8, errors reduce and enforce recovery cooldown.
+ health=parallel.AdaptiveTune(5,8)
+ assert (health.recipes.limit,health.images.limit)==(3,4)
+ for _ in range(6):await health.success()
+ assert (health.recipes.limit,health.images.limit)==(5,8)
+ with patch.object(parallel.time,'monotonic',return_value=100):
+  await health.failure();assert (health.recipes.limit,health.images.limit)==(2,4)
+  for _ in range(10):await health.success()
+  assert (health.recipes.limit,health.images.limit)==(2,4)
+ with patch.object(parallel.time,'monotonic',return_value=131):
+  for _ in range(3):await health.success()
+  assert (health.recipes.limit,health.images.limit)==(3,6)
+ target=item(1)
+ parallel.check_identity(target['source'],target,{'title':'菜1 VIP免费'})
+ for url,title in [(item(2)['source'],'菜1'),(target['source'],'菜2')]:
+  try:parallel.check_identity(url,target,{'title':title})
+  except RuntimeError:pass
+  else:raise AssertionError('cross-recipe content accepted')
+ assert parallel.origin_label(dict(target,_list_page='12',_list_total=1679,_list_position=3,_list_count=12))=='列表第12/1679页 · 本页第3/12道'
  print('PASS: async recipe concurrency bound, multi-page dedupe, video skip, failure retry/report/resume, fatal cancellation and shared image dedupe')
 asyncio.run(checks())

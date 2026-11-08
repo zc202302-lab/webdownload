@@ -14,6 +14,11 @@ from library_manager import Library, file_hash, read_settings, safe_name, save_j
 LIST_URL = 'https://www.easteat.com/book_list.php?action=cookbook_list'
 
 
+def clean_title(value):
+    value=re.sub(r'\s+',' ',value or '').strip()
+    return re.sub(r'\s*(?:VIP免费|会员免费|已购买)\s*$','',value,flags=re.I).strip()
+
+
 def recipe_id(url):
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
@@ -29,6 +34,8 @@ LIST_SCRIPT = r'''() => ({
       items:[...document.querySelectorAll('.cookbook-list .cookbook-item a')].map(a=>({
         source:a.href,title:a.querySelector('.cookbook-name')?.textContent.trim() || ''})),
       current:document.querySelector('.pagination a.active')?.textContent.trim() || '1',
+      total:(()=>{const last=[...document.querySelectorAll('.pagination a[href]')].find(a=>a.textContent.trim()==='末页');
+        if(!last)return null;const n=Number(new URL(last.href).searchParams.get('page'));return Number.isInteger(n)&&n>0?n:null;})(),
       links:[...document.querySelectorAll('.pagination a[href]')].filter(a=>/^\d+$/.test(a.textContent.trim())).map(a=>a.href),
       next:[...document.querySelectorAll('.pagination a')].find(a=>a.textContent.trim()==='下一页')?.href || null
     })'''
