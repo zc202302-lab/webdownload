@@ -176,6 +176,7 @@ def run_worker(mode,port,token,test=False):
             elif mode=='stop-prompt': input('等待停止')
         else:
             if mode=='magazines': from collector import main
+            elif mode=='journals-2025-2026': from download_2025_2026 import main
             elif mode=='recipes': from recipe_collector import main
             elif mode=='books': from book_collector import main
             elif mode=='single-book': from book_collector import manual_main as main

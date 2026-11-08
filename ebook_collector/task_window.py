@@ -32,7 +32,7 @@ class TaskWindow:
         self.pending = None
         self.finished = False
         self.closing = False
-        root.title({'recipes': '爆款菜谱下载', 'books': '电子书下载', 'single-book': '单本电子书下载', 'magazines': '电子杂志下载'}[mode])
+        root.title({'journals-2025-2026': '2026、2025电子刊下载', 'recipes': '爆款菜谱下载', 'books': '电子书下载', 'single-book': '单本电子书下载', 'magazines': '电子杂志下载'}[mode])
         root.geometry('800x600')
         root.minsize(650, 480)
         frame = ttk.Frame(root, padding=20)
