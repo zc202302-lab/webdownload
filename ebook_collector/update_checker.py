@@ -5,7 +5,8 @@ import hashlib
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+from http.client import HTTPException
 from urllib.request import Request, urlopen
 
 from app_runtime import VERSION
@@ -46,10 +47,29 @@ def parse_release(data, current=VERSION):
             'checksum_url': selected['SHA256SUMS.txt']['browser_download_url'], 'size': size}
 
 
+def open_remote(request, timeout=30):
+    """Retry transient transport/server failures once; never retry authorization errors."""
+    for attempt in range(2):
+        try:
+            return urlopen(request, timeout=timeout)
+        except HTTPError as exc:
+            if exc.code not in (408,500,502,503,504) or attempt:
+                raise
+        except (URLError, TimeoutError, OSError, HTTPException):
+            if attempt:raise
+
+
+def fallback_release(reason):
+    try:
+        return check_public_release()
+    except Exception as fallback:
+        raise RuntimeError(f'{reason}，正式发布页备用查询也失败：{fallback}。请使用离线更新包替换EXE，保留原文件夹其他内容。') from None
+
+
 def check_public_release():
     """Public web fallback avoids the unauthenticated API quota."""
     headers={'User-Agent':'WebDownload/'+VERSION}
-    with urlopen(Request(RELEASES_URL+'/latest',headers=headers),timeout=20) as response:
+    with open_remote(Request(RELEASES_URL+'/latest',headers=headers),timeout=20) as response:
         url=response.geturl()
     match=re.fullmatch(re.escape(RELEASES_URL)+r'/tag/(v?\d+\.\d+\.\d+)',url)
     if not match:
@@ -57,7 +77,7 @@ def check_public_release():
     tag=match[1]
     prefix=f'https://github.com/{REPO}/releases/download/{tag}/'
     # Read real asset length, rather than guessing metadata or trusting a mirror.
-    with urlopen(Request(prefix+'WebDownload.exe',headers=headers,method='HEAD'),timeout=30) as response:
+    with open_remote(Request(prefix+'WebDownload.exe',headers=headers,method='HEAD'),timeout=30) as response:
         length=response.headers.get('Content-Length','')
     if not re.fullmatch(r'\d+',length):
         raise RuntimeError('备用更新入口未提供程序大小，请手动下载正式发布版。')
@@ -70,7 +90,7 @@ def check_update():
     request = Request(API_URL, headers={'Accept': 'application/vnd.github+json',
                                        'User-Agent': 'WebDownload/' + VERSION})
     try:
-        with urlopen(request, timeout=20) as response:
+        with open_remote(request, timeout=20) as response:
             data = response.read(1024 * 1024 + 1)
         if len(data) > 1024 * 1024:
             raise RuntimeError('更新信息过大')
@@ -78,12 +98,11 @@ def check_update():
     except HTTPError as exc:
         if exc.code == 404:
             raise RuntimeError('尚未发布正式EXE版本，请稍后再检查。') from None
-        if exc.code in (403, 429):
-            try:
-                return check_public_release()
-            except Exception as fallback:
-                raise RuntimeError(f'GitHub API查询受限（HTTP {exc.code}），正式发布页备用查询也失败：{fallback}。可从本项目发布页手动下载EXE。') from None
+        if exc.code in (403,429,408,500,502,503,504):
+            return fallback_release(f'GitHub API查询受限或暂不可用（HTTP {exc.code}）')
         raise RuntimeError(f'更新服务返回HTTP {exc.code}') from None
+    except (URLError, TimeoutError, OSError, HTTPException) as exc:
+        return fallback_release(f'GitHub API连接失败（{type(exc).__name__}）')
 
 
 def download_update(release, root, progress=None):
@@ -92,7 +111,7 @@ def download_update(release, root, progress=None):
     if shutil.disk_usage(root).free < release['size'] * 3 + 64 * 1024 * 1024:
         raise RuntimeError('磁盘空间不足，无法下载更新。')
     headers = {'User-Agent': 'WebDownload/' + VERSION}
-    with urlopen(Request(release['checksum_url'], headers=headers), timeout=30) as response:
+    with open_remote(Request(release['checksum_url'], headers=headers), timeout=30) as response:
         checksum = response.read(1024 * 1024 + 1)
     if len(checksum) > 1024 * 1024:
         raise RuntimeError('校验文件过大')
@@ -108,7 +127,7 @@ def download_update(release, root, progress=None):
     digest = hashlib.sha256()
     received = 0
     try:
-        with urlopen(Request(release['exe_url'], headers=headers), timeout=30) as response, part.open('wb') as file:
+        with open_remote(Request(release['exe_url'], headers=headers), timeout=30) as response, part.open('wb') as file:
             while True:
                 chunk = response.read(1024 * 256)
                 if not chunk:

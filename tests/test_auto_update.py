@@ -17,7 +17,7 @@ class WebResponse(io.BytesIO):
         super().__init__(b'');self.url=url;self.headers={'Content-Length':size}
     def geturl(self):return self.url
 
-for status in (403,429):
+for status in (403,429,408,500,502,503,504):
     calls=[]
     def limited(request,**kwargs):
         calls.append(request)
@@ -30,7 +30,7 @@ for status in (403,429):
     with patch.object(checks,'urlopen',side_effect=limited):
         found=checks.check_update()
     assert found['available'] and found['size']==12345 and found['version']=='v99.0.0'
-    assert len(calls)==3
+    assert len(calls)==(3 if status in (403,429) else 4)
 for url,size in [('https://evil.test/tag/v99.0.0','12345'),
                  (checks.RELEASES_URL+'/tag/v99.0.0',''),
                  (checks.RELEASES_URL+'/tag/v99.0.0','99999999999')]:
@@ -132,3 +132,13 @@ with tempfile.TemporaryDirectory() as folder:
     assert target.read_bytes()==b'old' and (stage/'error.txt').exists() and start.call_count==2
 print('PASS: main-loop startup acknowledgement, failed/timeout startup detection, rollback diagnosis and original-app restart')
 
+
+# API timeout/network errors also fall back, while transient requests retry once.
+from urllib.error import URLError
+for error in (TimeoutError('timeout'),URLError('offline')):
+ with patch.object(checks,'urlopen',side_effect=error) as connection,patch.object(checks,'check_public_release',return_value={'version':'v9.0.0'}) as fallback:
+  assert checks.check_update()['version']=='v9.0.0'
+  assert connection.call_count==2 and fallback.call_count==1
+with patch.object(checks,'urlopen',side_effect=[HTTPError(checks.API_URL,504,'timeout',{},None),'ok']) as connection:
+ assert checks.open_remote(object())=='ok' and connection.call_count==2
+print('PASS: transient HTTP and network retry, 504/timeout public fallback')
