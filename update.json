@@ -1,0 +1,18 @@
+{
+  "tag_name": "v1.0.28",
+  "html_url": "https://github.com/zc202302-lab/webdownload/releases/tag/v1.0.28",
+  "asset_commit": "23bf74fc11a9e462cd4a7f23d640d04811a7c0f3",
+  "sha256": "dd2653bd0e1a7417b348d93585c63daa750512a0ca6011067315e802302ae1ba",
+  "source_commit": "bce971eec78599fb96d38ca681e6405ebe1a67e9",
+  "assets": [
+    {
+      "name": "WebDownload.exe",
+      "browser_download_url": "https://github.com/zc202302-lab/webdownload/releases/download/v1.0.28/WebDownload.exe",
+      "size": 61558603
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "browser_download_url": "https://github.com/zc202302-lab/webdownload/releases/download/v1.0.28/SHA256SUMS.txt"
+    }
+  ]
+}
