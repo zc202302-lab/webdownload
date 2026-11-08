@@ -72,6 +72,19 @@ def build_pdf(paths, output, outline=None):
     temporary.replace(output)
 
 
+def reader_field_ready(frame, field):
+    if not field.count():
+        return False
+    if field.is_visible():
+        return True
+    # Some readers hide the bottom toolbar while showing page images and side arrows.
+    return frame.locator('img').evaluate_all(r'''es => es.some(e=>{
+      const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+      return r.width>=100 && r.height>=100 && s.display!=='none' && s.visibility!=='hidden'
+        && /\/\d+\.(jpg|jpeg|png)(?:[?#]|$)/i.test(e.currentSrc||e.src||'');
+    })''')
+
+
 def find_reader(context, timeout=60, pages=None):
     deadline = time.monotonic() + timeout
     baseline=set(context.pages)
@@ -90,7 +103,7 @@ def find_reader(context, timeout=60, pages=None):
                             continue
                         try_mobile_link(frame)
                         field = frame.locator('#currentPageIndexTextField')
-                        if field.count() and field.is_visible():
+                        if reader_field_ready(frame, field):
                             value = field.input_value(timeout=2000)
                             if re.search(r'/\s*\d+', value):
                                 title = frame.locator('title').text_content(timeout=2000) or '电子书'
@@ -106,7 +119,7 @@ def find_reader(context, timeout=60, pages=None):
 
 def try_mobile_link(frame):
     field=frame.locator('#currentPageIndexTextField')
-    if field.count() and field.is_visible():
+    if reader_field_ready(frame, field):
         return False
     links=frame.locator('a').filter(has_text=re.compile(r'^\s*here\s*$',re.I))
     if not links.count():
@@ -129,7 +142,7 @@ def recover_reader(frame,settings,expected=None):
     try:
         if not frame.is_detached():
             field=frame.locator('#currentPageIndexTextField')
-            if field.count() and field.is_visible():
+            if reader_field_ready(frame, field):
                 return frame
     except PlaywrightError:
         pass

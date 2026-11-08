@@ -60,7 +60,9 @@ class Empty:
 class Nodes:
     def __init__(self,rows):self.rows=rows;self.clicked=[]
     def count(self):return 3
-    def evaluate_all(self,script):assert script==books.ARROW_PROBE;return self.rows
+    def evaluate_all(self,script):
+        if script==books.SIDE_ARROW_PROBE:return getattr(self,'side',[])
+        assert script==books.ARROW_PROBE;return self.rows
     def nth(self,index):
         return types.SimpleNamespace(click=lambda **kwargs:self.clicked.append(index))
 class Frame:
@@ -75,3 +77,61 @@ for rows in ([],[{'index':1},{'index':2}]):
     else:raise AssertionError('ambiguous/missing arrow must stop')
     assert not frame.nodes.clicked
 print('PASS: fallback clicks only unique candidate, never guesses ambiguous arrows')
+
+frame=Frame([]);frame.nodes.side=[{'index':1}];books.next_arrow(frame);assert frame.nodes.clicked==[1]
+frame=Frame([]);frame.nodes.side=[{'index':0},{'index':2}]
+try:books.next_arrow(frame)
+except RuntimeError:pass
+else:raise AssertionError('ambiguous side arrows accepted')
+assert not frame.nodes.clicked
+
+side_script=r"""
+const probe=PROBE, assert=require('assert');
+function node(attrs={},r={left:1020,right:1060,top:300,bottom:350,width:40,height:50},parent=null){
+ const n={id:attrs.id||'',src:attrs.src||'',currentSrc:attrs.src||'',textContent:attrs.text||'',parent,
+ getAttribute:k=>attrs[k]||null,getBoundingClientRect:()=>r,
+ contains:o=>{for(let p=o.parent;p;p=p.parent)if(p===n)return true;return false;},
+ closest:()=>{for(let p=n;p;p=p.parent)if(p.button)return p;return null;},
+ style:{display:'block',visibility:'visible',backgroundImage:'none'},button:attrs.button};return n;
+}
+global.getComputedStyle=e=>e.style;
+let images=[node({src:'https://example.test/pages/2.jpg'},
+ {left:200,right:1000,top:50,bottom:700,width:800,height:650})];
+global.document={querySelectorAll:()=>images,documentElement:{clientWidth:1200}};
+const right=node({class:'flip-button right'}),left=node({class:'flip-button left'});
+assert.deepStrictEqual(probe([left,right]).map(x=>x.index),[1]);
+const bookIcon=node({class:'arrow-right'},{left:800,right:840,top:300,bottom:350,width:40,height:50});
+assert.strictEqual(probe([bookIcon]).length,0);
+const last=node({class:'right last-page'});assert.strictEqual(probe([last]).length,0);
+right.disabled=true;assert.strictEqual(probe([right]).length,0);right.disabled=false;
+assert.strictEqual(probe([right,node({class:'chevron-right'})]).length,2);
+const parent=node({class:'right',button:true});const icon=node({class:'chevron-right'},undefined,parent);
+assert.deepStrictEqual(probe([parent,icon]).map(x=>x.index),[0]);
+const hidden=node({class:'right'});hidden.style.display='none';assert.strictEqual(probe([hidden]).length,0);
+images=[];assert.strictEqual(probe([right]).length,0);
+console.log('PASS: side arrow actual JS, right-side book bounds, nested icons, disabled/hidden/left/last/content exclusion and ambiguity');
+""".replace('PROBE',books.SIDE_ARROW_PROBE)
+subprocess.run(['node','-e',side_script],check=True)
+# Hidden page-number field is accepted only alongside visible numerical book images.
+from collector import reader_field_ready
+field=types.SimpleNamespace(count=lambda:1,is_visible=lambda:False)
+for visible in [True,False]:
+ frame=types.SimpleNamespace(locator=lambda selector:types.SimpleNamespace(evaluate_all=lambda script:visible))
+ assert reader_field_ready(frame,field)==visible
+
+left_script=side_script.replace('const probe='+books.SIDE_ARROW_PROBE, 'const probe='+books.PREVIOUS_SIDE_PROBE)
+# Execute a left-specific fixture separately from the right-arrow expectations.
+left_script=left_script[:left_script.index('const right=node')]+"const left=node({class:'flip-button left'},{left:100,right:140,top:300,bottom:350,width:40,height:50});assert.deepStrictEqual(probe([left]).map(x=>x.index),[0]);"
+subprocess.run(['node','-e',left_script],check=True)
+# Hidden-toolbar resume moves through validated spreads both ways.
+from unittest.mock import MagicMock
+for initial,target,backwards in [('5-6/8',2,True),('1-2/8',7,False)]:
+ frame=MagicMock(); field=frame.locator.return_value
+ field.is_visible.return_value=False
+ field.input_value.side_effect=[initial, f'{target}/8']
+ field.evaluate_all.return_value=[{'index':0}]
+ with patch.object(books,'next_arrow') as advance,patch.object(books,'wait_pages',return_value=([target],{})) as wait:
+  books.seek_page(frame,target,8,{'chapter_wait_seconds':60},Path('.'))
+  assert wait.call_count==1 and advance.call_count==(0 if backwards else 1)
+ field.fill.assert_not_called()
+print('PASS: hidden toolbar resume uses verified left/right navigation')

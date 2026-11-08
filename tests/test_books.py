@@ -62,6 +62,7 @@ def expect_failure(action, message):
 
 
 class Field:
+    def is_visible(self):return True
     def __init__(self, frame):
         self.frame = frame
 

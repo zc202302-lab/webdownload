@@ -1,3 +1,7 @@
+# v1.0.19 侧边翻页
+
+底部工具栏候选为空时，next_arrow使用SIDE_ARROW_PROBE识别真实数值页图边界外、书页中部的右侧语义箭头；排除正文/隐藏/禁用/末页/左向控件，唯一才点击。底部候选有歧义则仍停止，不用侧边绕过歧义。页码输入框存在但工具栏隐藏时，reader_field_ready要求可见数值页图；seek_page用左右侧箭头逐次校验翻页定位断点，不能对隐藏输入框fill。仍要求阅读器页码与原图数字文件名校验，不猜总页数/图片URL；无页码元数据的阅读器尚不支持，保存诊断停止。tests/test_reader_navigation.py运行真实侧边JS与隐藏工具栏续传测试。截图无法证明实际DOM完全适配，登录后需实测。
+
 # v1.0.18 菜谱专题内嵌电子书
 
 “单本电子书”支持guard-safe-app.easteat.com/beitian/book_list.php?action=cookbook_detail&id=…以及明确允许的主站同类详情。用户先在软件浏览器登录并点击专题阅读按钮，输入书名启动。cookbook_reader_source只读取真实.topic-button[data-url]与当前#readerModal/#readerIframe，核对阅读器属于此iframe或其子frame；独立页须来自真实opener且URL与按钮一致。同菜谱的不同专题以真实阅读URL SHA256区分，使用cookbook_ID_hash命名空间，避免与旧电子书数字ID碰撞。保留原有续传、页码校验、原图校验和完成关闭流程。公开菜谱页结构已核查；登录后阅读器完整采集仍需用户复测。tests/test_single_book.py覆盖入口/串书/来源/iframe/移动版跳转。

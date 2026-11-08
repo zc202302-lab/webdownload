@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, quote, urlparse, urljoin, urldefrag
 
 from playwright.sync_api import sync_playwright
 from chapter_reader import download_best
-from collector import ROOT, build_pdf, find_reader, launch_browser, page_number, verified, recover_reader
+from collector import ROOT, build_pdf, find_reader, launch_browser, page_number, verified, recover_reader, reader_field_ready
 from library_manager import Library, StorageFull, file_hash, read_settings, safe_name, save_json, validate_pdf
 
 LIST_URL = 'https://www.easteat.com/book_list.php?category=books'
@@ -298,6 +298,49 @@ ARROW_PROBE = r'''es => {
 }'''
 
 
+SIDE_ARROW_PROBE = r'''es => {
+  const backwards=false;
+  const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+    return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden'
+      && !e.disabled && e.getAttribute('aria-disabled')!=='true';};
+  const images=[...document.querySelectorAll('img')].filter(e=>visible(e)
+    && /\/\d+\.(jpg|jpeg|png)(?:[?#]|$)/i.test(e.currentSrc||e.src||'')
+    && e.getBoundingClientRect().width>=100 && e.getBoundingClientRect().height>=100);
+  if(!images.length)return [];
+  const rects=images.map(e=>e.getBoundingClientRect());
+  const bounds={left:Math.min(...rects.map(r=>r.left)),right:Math.max(...rects.map(r=>r.right)),top:Math.min(...rects.map(r=>r.top)),
+    bottom:Math.max(...rects.map(r=>r.bottom))};
+  const found=new Map();
+  es.forEach((e,index)=>{
+    if(!visible(e))return;
+    const tokens=[e.id,e.getAttribute('class'),e.getAttribute('title'),e.getAttribute('alt'),
+      e.getAttribute('aria-label'),e.getAttribute('src'),getComputedStyle(e).backgroundImage,
+      (e.textContent||'').trim().slice(0,40)].filter(Boolean).join(' ');
+    if(/first|last|chapter|首页|末页|上一章|下一章/i.test(tokens))return;
+    if(backwards ? /next|right|下一|下页/i.test(tokens) : /previous|prev|left|上一|上页/i.test(tokens))return;
+    const semantic=backwards ? /(?:prev(?:ious)?|left|上一页|上页)/i.test(tokens) :/(?:^|[\s_\-/.])(next|right)(?:page|button|btn|arrow|icon)?(?:$|[\s_\-/.?])/i.test(tokens)
+      || /arrow[-_]?right|chevron[-_]?right|下一页|下页|^(?:›|❯|→|>)$/.test(tokens.trim());
+    if(!semantic)return;
+    const target=e.closest('button,a,[role="button"],[onclick]')||e;
+    if(!visible(target))return;
+    const r=target.getBoundingClientRect(),mid=r.top+r.height/2;
+    // Actual right-side controls only, outside page pixels, near the book's middle.
+    if((backwards ? r.right>bounds.left+8 : r.left<bounds.right-8) || r.left<0 || r.right>document.documentElement.clientWidth
+       || mid<bounds.top+(bounds.bottom-bounds.top)*0.2
+       || mid>bounds.bottom-(bounds.bottom-bounds.top)*0.2
+       || r.width>160 || r.height>240)return;
+    const targetIndex=es.indexOf(target);if(targetIndex<0)return;
+    found.set(target,{index:targetIndex,id:(target.id||'').slice(0,80),
+      class_name:(target.getAttribute('class')||'').slice(0,120)});
+  });
+  return [...found.entries()].filter(([e])=>![...found.keys()].some(o=>o!==e&&e.contains(o)))
+    .map(([,row])=>row);
+}'''
+
+
+PREVIOUS_SIDE_PROBE = SIDE_ARROW_PROBE.replace('const backwards=false;', 'const backwards=true;')
+
+
 def next_arrow(frame, work=None):
     # Common FlipBook toolbar identifiers; semantic labels cover variants.
     selectors = ('#nextPageButton', '#nextPage', '#next', '#btnNext', '.nextPageButton',
@@ -320,10 +363,41 @@ def next_arrow(frame, work=None):
     if len(candidates)==1:
         nodes.nth(candidates[0]['index']).click(timeout=10000)
         return
+    side_candidates=[]
+    if not candidates and nodes.count():
+        side_candidates=nodes.evaluate_all(SIDE_ARROW_PROBE)
+        if len(side_candidates)==1:
+            nodes.nth(side_candidates[0]['index']).click(timeout=10000)
+            return
     if work is not None:
         save_json(work / 'navigation_diagnostic.json', {'reason':'下一页箭头未唯一识别',
-                   'candidates':candidates})
+                   'candidates':candidates,'side_candidates':side_candidates})
     raise RuntimeError('无法唯一识别阅读器下一页箭头，已停止；请提供阅读器页面结构以便适配。')
+
+
+def seek_page(frame, expected, total, settings, work):
+    field=frame.locator('#currentPageIndexTextField')
+    if field.is_visible():
+        field.fill(str(expected));field.press('Enter')
+        return
+    # Hidden toolbar: use genuine side controls in either direction, checking every spread.
+    for _ in range(total):
+        current=displayed_pages(field.input_value(),total)
+        if expected in current:return
+        backwards=expected<current[0]
+        step=current[0]-1 if backwards else current[-1]+1
+        if backwards:
+            nodes=frame.locator(ARROW_NODES)
+            rows=nodes.evaluate_all(PREVIOUS_SIDE_PROBE)
+            if len(rows)!=1:
+                save_json(work/'navigation_diagnostic.json',{'reason':'上一页侧边箭头未唯一识别','candidates':rows})
+                raise RuntimeError('无法唯一识别上一页侧边箭头，进度保留。')
+            nodes.nth(rows[0]['index']).click(timeout=10000)
+        else:next_arrow(frame,work)
+        new,_=wait_pages(frame,step,total,settings,work,seeking=True)
+        if (backwards and new[0]>=current[0]) or (not backwards and new[-1]<=current[-1]):
+            raise RuntimeError('侧边箭头翻页未产生正确进展，进度保留。')
+    raise RuntimeError('侧边翻页未能定位待下载页，进度保留。')
 
 
 def collect_book(context, frame, total, item, store, settings):
@@ -345,8 +419,7 @@ def collect_book(context, frame, total, item, store, settings):
     if expected<=total:
         initial=displayed_pages(frame.locator('#currentPageIndexTextField').input_value(),total)
         if expected not in initial:
-            field=frame.locator('#currentPageIndexTextField')
-            field.fill(str(expected));field.press('Enter');seeking=True
+            seek_page(frame,expected,total,settings,work);seeking=True
         print(f'继续下载：已校验{len(valid)}页，从第{expected}页开始。')
     else:
         print(f'全部{total}页已校验，直接生成PDF。')
@@ -388,8 +461,7 @@ def collect_book(context, frame, total, item, store, settings):
             if expected==pages[-1]+1:
                 next_arrow(frame, work)
             else:
-                field=frame.locator('#currentPageIndexTextField')
-                field.fill(str(expected));field.press('Enter');seeking=True
+                seek_page(frame,expected,total,settings,work);seeking=True
     images = [work / f'{n:04d}.jpg' for n in range(1, total+1)]
     if not all(verified(p, manifest['pages'].get(str(n), {}).get('sha256')) for n,p in enumerate(images,1)):
         raise RuntimeError('全书页面校验失败，未生成PDF。')
@@ -504,7 +576,7 @@ def manual_reader(context,settings):
         for candidate in list(page.frames):
             try:
                 field=candidate.locator('#currentPageIndexTextField')
-                if not candidate.is_detached() and field.count() and field.is_visible():
+                if not candidate.is_detached() and reader_field_ready(candidate,field):
                     readers.append(candidate)
             except Exception:continue
     if len(readers)!=1 or frame not in readers:
