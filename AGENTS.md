@@ -1,3 +1,7 @@
+# v1.0.18 菜谱专题内嵌电子书
+
+“单本电子书”支持guard-safe-app.easteat.com/beitian/book_list.php?action=cookbook_detail&id=…以及明确允许的主站同类详情。用户先在软件浏览器登录并点击专题阅读按钮，输入书名启动。cookbook_reader_source只读取真实.topic-button[data-url]与当前#readerModal/#readerIframe，核对阅读器属于此iframe或其子frame；独立页须来自真实opener且URL与按钮一致。同菜谱的不同专题以真实阅读URL SHA256区分，使用cookbook_ID_hash命名空间，避免与旧电子书数字ID碰撞。保留原有续传、页码校验、原图校验和完成关闭流程。公开菜谱页结构已核查；登录后阅读器完整采集仍需用户复测。tests/test_single_book.py覆盖入口/串书/来源/iframe/移动版跳转。
+
 # 接续开发
 
 v1.0.16新增桌面“单本电子书”/single-book任务；同一受控浏览器手动打开详情→立即阅读，在任务窗口输入书名并开始。manual_session等待每次明确输入，不扫描列表、不自动选下一本；退出输入“退出”。先按规范化书名（NFKC/空白/书名号）和有效已完成PDF查重，再按真实详情ID查重；坏/丢失PDF可重下，已有未完成ID沿用原书名/路径续传。manual_reader要求唯一可见阅读器及自身/真实opener的有效东方美食详情链接，身份不明或多阅读器则要求用户整理后重输。batch_books(opened_reader=...)复用打开的阅读器，不重进详情。弹窗完成按原逻辑关闭；独立阅读页留给用户自行关闭。一次会话begin_run一次，书间不清缺失日志。GUI四按钮，--collect白名单及worker分发同步；冻结自检覆盖单本窗口输入/按钮。tests/test_single_book.py覆盖按次手动启动、标题/ID去重、旧ID续传名、坏PDF、已打开阅读器、唯一/来源校验。

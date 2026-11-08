@@ -1,12 +1,13 @@
 """Books list: scroll discovery, verified arrow navigation and modal close."""
 import html
+import hashlib
 import json
 import re
 import shutil
 import time
 import unicodedata
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse, urljoin, urldefrag
 
 from playwright.sync_api import sync_playwright
 from chapter_reader import download_best
@@ -16,15 +17,66 @@ from library_manager import Library, StorageFull, file_hash, read_settings, safe
 LIST_URL = 'https://www.easteat.com/book_list.php?category=books'
 
 
+def cookbook_detail(url):
+    parsed=urlparse(url)
+    query=parse_qs(parsed.query)
+    return (parsed.scheme in ('http','https') and not parsed.username and not parsed.password
+            and parsed.hostname in ('easteat.com','www.easteat.com','guard-safe-app.easteat.com')
+            and parsed.path in ('/book_list.php','/beitian/book_list.php')
+            and query.get('action')==['cookbook_detail']
+            and len(query.get('id',[]))==1 and query['id'][0].isdigit())
+
+
 def book_identifier(url):
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
     identifier = query.get('id', [''])[0]
+    if cookbook_detail(url):
+        # One recipe can link several different ebooks. Never key all by recipe ID.
+        token=parse_qs(parsed.fragment).get('ebook',[''])[0]
+        if re.fullmatch(r'[0-9a-f]{64}',token):
+            return f'cookbook_{identifier}_{token[:24]}'
+        raise ValueError('请先打开菜谱专题中的电子书，尚未确认具体阅读入口。')
     if (parsed.scheme not in ('http', 'https') or parsed.hostname not in ('easteat.com', 'www.easteat.com')
+            or parsed.username or parsed.password
             or parsed.path != '/magazine_detail.php' or query.get('type') != ['detail']
-            or not identifier.isdigit()):
+            or len(query.get('id',[]))!=1 or not identifier.isdigit()):
         raise ValueError('电子书详情链接异常，已停止。')
     return identifier
+
+
+def cookbook_reader_source(page, source, frame):
+    # Read only the site's existing permission-gated buttons and active iframe.
+    # The iframe may have navigated from Flash to mobile; retain its original src.
+    state=page.evaluate(r'''() => {
+      const modal=document.querySelector('#readerModal');
+      const iframe=modal?.querySelector('#readerIframe');
+      const visible=e=>!!e && e.getClientRects().length>0 && getComputedStyle(e).visibility!=='hidden';
+      return {active:visible(modal) && visible(iframe), src:iframe?.getAttribute('src') || '',
+        topics:[...document.querySelectorAll('.topic-button[data-url]')].filter(visible)
+          .map(e=>e.getAttribute('data-url'))};
+    }''')
+    candidates={urljoin(source,u) for u in state.get('topics',[]) if u}
+    # An independent reader tab must come from the actual opener and match a button.
+    actual=urljoin(source,state.get('src','')) if state.get('active') and state.get('src') else frame.url
+    if actual not in candidates or urlparse(actual).scheme not in ('http','https'):
+        raise ValueError('无法将当前阅读器对应到菜谱专题的实际阅读按钮，请关闭阅读器后重新打开。')
+    if page is frame.page:
+        iframe=page.locator('#readerIframe')
+        owner=iframe.element_handle().content_frame() if iframe.count()==1 else None
+        if owner is None or (frame is not owner and owner not in frame_ancestors(frame)):
+            raise ValueError('当前阅读器不属于菜谱专题弹窗，请关闭其他阅读页后重试。')
+    token=hashlib.sha256(actual.encode('utf-8')).hexdigest()
+    return urldefrag(source)[0]+'#ebook='+token
+
+
+def frame_ancestors(frame):
+    ancestors=[]
+    parent=frame.parent_frame
+    while parent is not None:
+        ancestors.append(parent)
+        parent=parent.parent_frame
+    return ancestors
 
 
 def list_snapshot(page):
@@ -463,10 +515,13 @@ def manual_reader(context,settings):
     if opener is not None and not opener.is_closed():sources.append(opener.url)
     for source in sources:
         try:
+            if cookbook_detail(source):
+                detail=page if source==page.url else opener
+                source=cookbook_reader_source(detail,source,frame)
             book_identifier(source)
             return page,source,(frame,value,title)
         except ValueError:pass
-    raise RuntimeError('未找到此书的东方美食详情链接。请从电子书详情页点击立即阅读后，再输入书名。')
+    raise RuntimeError('未找到此书的东方美食详情链接。请从电子书详情页或菜谱专题页打开阅读内容后，再输入书名。')
 
 
 def manual_session(context,store,settings,ask=None):

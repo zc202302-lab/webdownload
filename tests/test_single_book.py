@@ -86,3 +86,50 @@ with tempfile.TemporaryDirectory() as folder:
         except RuntimeError as exc:assert '详情链接' in str(exc)
         else:raise AssertionError('unknown book identity accepted')
 print('PASS: manual per-book start, title/ID dedupe, partial identity, damaged PDF retry and no reader reopening')
+
+# Actual guard-safe recipe page: permission-gated .topic-button opens #readerIframe.
+source='https://guard-safe-app.easteat.com/beitian/book_list.php?action=cookbook_detail&id=137182'
+from unittest.mock import MagicMock
+import hashlib
+reader_url='https://reader.example.test/book/mobile/index.html'
+def topic_page(urls,active_src,owner):
+    detail=MagicMock();detail.url=source
+    detail.evaluate.return_value={'active':True,'src':active_src,'topics':urls}
+    detail.locator.return_value.count.return_value=1
+    detail.locator.return_value.element_handle.return_value.content_frame.return_value=owner
+    return detail
+frame=MagicMock();frame.url=reader_url
+page=topic_page([reader_url],reader_url,frame);frame.page=page
+resolved=books.cookbook_reader_source(page,source,frame)
+assert books.book_identifier(resolved).startswith('cookbook_137182_')
+assert books.book_identifier(resolved)!=books.book_identifier(item('other',137182)['source'])
+other='https://reader.example.test/another/mobile/index.html'
+page.evaluate.return_value={'active':True,'src':other,'topics':[reader_url,other]}
+second=books.cookbook_reader_source(page,source,frame)
+assert books.book_identifier(resolved)!=books.book_identifier(second)
+# Reopened same topic yields the same checkpoint identity, despite here navigation.
+page.evaluate.return_value={'active':True,'src':reader_url,'topics':[reader_url]}
+frame.url=reader_url+'?mobile=1'
+assert books.cookbook_reader_source(page,source,frame)==resolved
+for bad in [source,source.replace('guard-safe-app.easteat.com','guard-safe-app.easteat.com.evil.test')+'#ebook='+'a'*64,
+            source.replace('137182','137182&id=9')+'#ebook='+'a'*64]:
+    try: books.book_identifier(bad)
+    except ValueError: pass
+    else: raise AssertionError('unconfirmed/spoofed/ambiguous source accepted')
+page.evaluate.return_value={'active':True,'src':other,'topics':[reader_url]}
+try:books.cookbook_reader_source(page,source,frame)
+except ValueError:pass
+else:raise AssertionError('unmatched reader accepted')
+page.evaluate.return_value={'active':True,'src':reader_url,'topics':[reader_url]}
+page.locator.return_value.element_handle.return_value.content_frame.return_value=None
+try:books.cookbook_reader_source(page,source,frame)
+except ValueError:pass
+else:raise AssertionError('unrelated iframe accepted')
+# Real parent/opener resolution uses the recipe's existing button, not a guessed URL.
+page.locator.return_value.element_handle.return_value.content_frame.return_value=frame
+page.frames=[frame];page.is_closed.return_value=False;frame.is_detached.return_value=False
+frame.locator.return_value.count.return_value=1;frame.locator.return_value.is_visible.return_value=True
+context=types.SimpleNamespace(pages=[page])
+with patch.object(books,'find_reader',return_value=(frame,'1/20','topic')):
+    assert books.manual_reader(context,settings)[1]==resolved
+print('PASS: guard-safe cookbook reader identity, separate topic checkpoints, mobile transition, iframe ownership and source validation')
